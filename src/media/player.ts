@@ -1,5 +1,6 @@
 // プレビューの再生。タイムラインに並んだかたまりを、順につないで映像と音を出す
-import { emptyProject, type Project } from '../core/project';
+import type { AudioBufferSink } from 'mediabunny';
+import { activeTracks, emptyProject, sourceAudio, type Clip, type Project } from '../core/project';
 import { clamp } from '../core/time';
 import { clipLength, clipStarts, locate, totalDuration } from '../core/timeline';
 import { PREVIEW_HEIGHT, PREVIEW_WIDTH, type SourceRegistry } from './registry';
@@ -184,10 +185,8 @@ export class Player {
   }
 
   private async runAudio(gen: number, from: number): Promise<void> {
-    const ctx = this.ctx;
-    const gain = this.gain;
     const loc = locate(this.project, from);
-    if (!ctx || !gain || !loc) return;
+    if (!this.ctx || !this.gain || !loc) return;
     const clips = this.project.clips;
     for (let i = loc.index; i < clips.length; i++) {
       const clip = clips[i];
@@ -195,38 +194,103 @@ export class Player {
       const sourceFrom = i === loc.index ? loc.sourceTime : clip.start;
       const source = await this.registry.open(clip.sourceId).catch(() => null);
       if (gen !== this.generation) return;
-      if (!source?.audioSink) continue;
-      try {
-        for await (const { buffer, timestamp, duration } of source.audioSink.buffers(sourceFrom, clip.end)) {
-          if (gen !== this.generation) return;
-          const useFrom = Math.max(timestamp, sourceFrom);
-          const useTo = Math.min(timestamp + duration, clip.end);
-          if (useTo <= useFrom) continue;
-          let when = this.ctxStart + (clipStart + (useFrom - clip.start) - this.timelineStart);
-          let offset = useFrom - timestamp;
-          let length = useTo - useFrom;
-          const now = ctx.currentTime;
-          if (when < now) {
-            // 用意が間に合わなかった分は飛ばす
-            const late = now - when;
-            offset += late;
-            length -= late;
-            when = now;
-          }
-          if (length > 0.001) {
-            const node = ctx.createBufferSource();
-            node.buffer = buffer;
-            node.connect(gain);
-            node.start(when, offset, length);
-            this.nodes.add(node);
-            node.onended = () => this.nodes.delete(node);
-          }
-          while (gen === this.generation && when - ctx.currentTime > AUDIO_AHEAD) await sleep(100);
-        }
-      } catch (e) {
-        if (gen === this.generation) console.warn('プレビューの音を読めませんでした', e);
-      }
+      if (!source) continue;
+      // 鳴らす音（声・ゲームの音など）を、それぞれの大きさで同時に流す
+      const tracks = activeTracks(sourceAudio(this.project, clip.sourceId));
+      await Promise.all(
+        tracks.map(({ index, gain }) => {
+          const sink = source.audioSinks[index];
+          if (!sink || gain <= 0) return Promise.resolve();
+          return this.scheduleTrack(gen, sink, clip, clipStart, sourceFrom, gain);
+        }),
+      );
     }
+  }
+
+  /** 1つの音を、かたまりの範囲だけ鳴らす予約をする */
+  private async scheduleTrack(
+    gen: number,
+    sink: AudioBufferSink,
+    clip: Clip,
+    clipStart: number,
+    sourceFrom: number,
+    gainValue: number,
+  ): Promise<void> {
+    const ctx = this.ctx!;
+    const trackGain = ctx.createGain();
+    trackGain.gain.value = gainValue;
+    trackGain.connect(this.gain!);
+    try {
+      for await (const { buffer, timestamp, duration } of sink.buffers(sourceFrom, clip.end)) {
+        if (gen !== this.generation) return;
+        const useFrom = Math.max(timestamp, sourceFrom);
+        const useTo = Math.min(timestamp + duration, clip.end);
+        if (useTo <= useFrom) continue;
+        let when = this.ctxStart + (clipStart + (useFrom - clip.start) - this.timelineStart);
+        let offset = useFrom - timestamp;
+        let length = useTo - useFrom;
+        const now = ctx.currentTime;
+        if (when < now) {
+          // 用意が間に合わなかった分は飛ばす
+          const late = now - when;
+          offset += late;
+          length -= late;
+          when = now;
+        }
+        if (length > 0.001) {
+          const node = ctx.createBufferSource();
+          node.buffer = buffer;
+          node.connect(trackGain);
+          node.start(when, offset, length);
+          this.nodes.add(node);
+          node.onended = () => this.nodes.delete(node);
+        }
+        while (gen === this.generation && when - ctx.currentTime > AUDIO_AHEAD) await sleep(100);
+      }
+    } catch (e) {
+      if (gen === this.generation) console.warn('プレビューの音を読めませんでした', e);
+    }
+  }
+
+  /**
+   * 録画の1つの音だけを、from 秒から seconds 秒だけ鳴らす（どれが自分の声かを聴き比べるため）。
+   * 再生中なら止める。
+   */
+  async listen(sourceId: string, trackIndex: number, from: number, seconds: number): Promise<void> {
+    this.pause();
+    if (!this.ctx) {
+      this.ctx = new AudioContext();
+      this.gain = this.ctx.createGain();
+      this.gain.connect(this.ctx.destination);
+    }
+    if (this.ctx.state === 'suspended') await this.ctx.resume();
+    this.generation++;
+    const gen = this.generation;
+    this.stopAudio();
+    const source = await this.registry.open(sourceId).catch(() => null);
+    const sink = source?.audioSinks[trackIndex];
+    if (!sink || gen !== this.generation) return;
+    const ctx = this.ctx;
+    const start = ctx.currentTime + 0.1;
+    for await (const { buffer, timestamp, duration } of sink.buffers(from, from + seconds)) {
+      if (gen !== this.generation) return;
+      const useFrom = Math.max(timestamp, from);
+      const useTo = Math.min(timestamp + duration, from + seconds);
+      if (useTo <= useFrom) continue;
+      const node = ctx.createBufferSource();
+      node.buffer = buffer;
+      node.connect(this.gain!);
+      node.start(Math.max(ctx.currentTime, start + (useFrom - from)), useFrom - timestamp, useTo - useFrom);
+      this.nodes.add(node);
+      node.onended = () => this.nodes.delete(node);
+    }
+  }
+
+  /** 聴き比べを止める */
+  stopListening(): void {
+    if (this.playingNow) return;
+    this.generation++;
+    this.stopAudio();
   }
 
   private stopAudio(): void {

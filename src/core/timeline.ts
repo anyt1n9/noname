@@ -128,3 +128,68 @@ export function snapToFrame(t: number, frameRate: number): number {
   if (!(frameRate > 0)) return t;
   return Math.round(t * frameRate) / frameRate;
 }
+
+/** 録画の中の時刻で表した範囲 */
+export interface SourceRange {
+  sourceId: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * 録画の中の範囲をまとめて取り除く（無音カットや、字幕の行を消すときに使う）。
+ * タイムライン上の位置ではなく録画の時刻で指定するので、並べ替えや前のカットに左右されない。
+ */
+export function removeSourceRanges(project: Project, ranges: SourceRange[]): Project {
+  if (ranges.length === 0) return project;
+  const bySource = new Map<string, SourceRange[]>();
+  for (const r of ranges) {
+    if (r.end - r.start <= 0) continue;
+    const list = bySource.get(r.sourceId) ?? [];
+    list.push(r);
+    bySource.set(r.sourceId, list);
+  }
+  for (const list of bySource.values()) list.sort((a, b) => a.start - b.start);
+  let nextId = project.nextId;
+  let changed = false;
+  const clips: Clip[] = [];
+  for (const clip of project.clips) {
+    const cuts = bySource.get(clip.sourceId)?.filter((r) => r.end > clip.start && r.start < clip.end) ?? [];
+    if (cuts.length === 0) {
+      clips.push(clip);
+      continue;
+    }
+    changed = true;
+    let cursor = clip.start;
+    let first = true;
+    const pieces: [number, number][] = [];
+    for (const r of cuts) {
+      if (r.start > cursor) pieces.push([cursor, Math.min(r.start, clip.end)]);
+      cursor = Math.max(cursor, r.end);
+    }
+    if (cursor < clip.end) pieces.push([cursor, clip.end]);
+    for (const [start, end] of pieces) {
+      if (end - start < MIN_CLIP_SECONDS) continue;
+      clips.push({ ...clip, id: first ? clip.id : `c${nextId++}`, start, end });
+      first = false;
+    }
+  }
+  if (!changed) return project;
+  return { ...project, clips, nextId };
+}
+
+/** 録画の中の範囲が、完成した動画のどこに見えているか（かたまりごとに分かれることがある） */
+export function sourceRangeOnTimeline(project: Project, range: SourceRange): [number, number][] {
+  const result: [number, number][] = [];
+  let t = 0;
+  for (const clip of project.clips) {
+    const len = clipLength(clip);
+    if (clip.sourceId === range.sourceId) {
+      const a = Math.max(clip.start, range.start);
+      const b = Math.min(clip.end, range.end);
+      if (b > a) result.push([t + (a - clip.start), t + (b - clip.start)]);
+    }
+    t += len;
+  }
+  return result;
+}

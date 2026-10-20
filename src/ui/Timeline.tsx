@@ -4,7 +4,6 @@ import { peakBetween } from '../core/peaks';
 import type { Project } from '../core/project';
 import { clamp, formatClock } from '../core/time';
 import { clipLength, clipStarts, dropIndex, totalDuration } from '../core/timeline';
-import type { PeaksStore } from '../media/peaks';
 import { Icon } from './icons';
 import { cssColor, onThemeChange } from './theme';
 
@@ -18,6 +17,14 @@ const DRAG_THRESHOLD = 4;
 const MAX_PX_PER_SEC = 600;
 const TICK_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
 
+export interface TimelineMark {
+  id: string;
+  from: number;
+  to: number;
+  /** 残すと決めた候補 */
+  kept: boolean;
+}
+
 export interface TimelineControl {
   zoomIn(): void;
   zoomOut(): void;
@@ -29,8 +36,14 @@ interface Props {
   time: number;
   playing: boolean;
   selection: [number, number] | null;
-  peaks: PeaksStore;
-  peaksTick: number;
+  /** 録画の ID → 波形（目盛りごとの一番大きい音）。まだなければ undefined */
+  waveform: (sourceId: string) => Float32Array | undefined;
+  binSeconds: number;
+  /** 波形が増えたら変わる数（描き直しのため） */
+  levelsTick: number;
+  /** 切る候補などの印（完成した動画の時刻） */
+  marks?: TimelineMark[];
+  onToggleMark?(id: string): void;
   missing: Set<string>;
   disabled: boolean;
   control: { current: TimelineControl | null };
@@ -63,6 +76,8 @@ interface Colors {
   muted: string;
   accent: string;
   accentSoft: string;
+  cut: string;
+  cutLine: string;
 }
 
 function readColors(): Colors {
@@ -79,11 +94,13 @@ function readColors(): Colors {
     muted: cssColor('--muted'),
     accent: cssColor('--accent'),
     accentSoft: cssColor('--accent-soft'),
+    cut: cssColor('--cut'),
+    cutLine: cssColor('--cut-line'),
   };
 }
 
 export function Timeline(props: Props) {
-  const { project, time, selection, peaks, missing, disabled } = props;
+  const { project, time, selection, missing, disabled } = props;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
@@ -172,7 +189,9 @@ export function Timeline(props: Props) {
       offset,
       time,
       selection,
-      peaks,
+      waveform: props.waveform,
+      binSeconds: props.binSeconds,
+      marks: props.marks ?? [],
       missing,
       colors,
       dragIndex: drag.current?.kind === 'reorder' && drag.current.moved ? drag.current.index : null,
@@ -242,6 +261,12 @@ export function Timeline(props: Props) {
     const t = timeAt(e.clientX);
     if (d.kind === 'select') {
       if (!d.moved) {
+        // 印の上を押したら、印を切り替える（切る候補なら、その場所だけ残す）
+        const mark = props.onToggleMark && props.marks?.find((m) => t >= m.from && t <= m.to);
+        if (mark) {
+          props.onToggleMark!(mark.id);
+          return;
+        }
         props.onSelect(null);
         props.onSeek(t);
       }
@@ -286,9 +311,11 @@ export function Timeline(props: Props) {
       <div class="timeline-bar">
         <span class="title">タイムライン</span>
         <span class="hint">
-          {total > 0
-            ? '下の段をなぞると、その範囲を消せます。上の名前の帯をドラッグすると、順番を変えられます。'
-            : '録画を入れると、ここに並びます。'}
+          {total <= 0
+            ? '録画を入れると、ここに並びます。'
+            : props.marks && props.marks.length > 0
+              ? '赤い印が切る候補です。押すと、その場所だけ残せます（もう一度押すと候補に戻ります）。'
+              : '下の段をなぞると、その範囲を消せます。上の名前の帯をドラッグすると、順番を変えられます。'}
         </span>
         <button class="btn icon ghost" title="縮小（−）" aria-label="縮小" onClick={() => props.control.current?.zoomOut()} disabled={total <= 0}>
           <Icon name="minus" />
@@ -349,7 +376,9 @@ interface DrawArgs {
   offset: number;
   time: number;
   selection: [number, number] | null;
-  peaks: PeaksStore;
+  waveform: (sourceId: string) => Float32Array | undefined;
+  binSeconds: number;
+  marks: TimelineMark[];
   missing: Set<string>;
   colors: Colors;
   dragIndex: number | null;
@@ -431,8 +460,8 @@ function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
       g.restore();
     }
     // 音の形
-    const entry = a.peaks.get(clip.sourceId);
-    if (entry) {
+    const peaks = a.waveform(clip.sourceId);
+    if (peaks) {
       const mid = trackTop + TRACK_H / 2;
       const half = TRACK_H / 2 - 6;
       g.fillStyle = colors.wave;
@@ -442,7 +471,7 @@ function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
       for (let x = from; x < to; x++) {
         const tl = offset + x / pxPerSec - starts[i];
         const st = clip.start + tl;
-        const p = peakBetween(entry.peaks, a.peaks.binSeconds, st, st + secPerPx);
+        const p = peakBetween(peaks, a.binSeconds, st, st + secPerPx);
         const h = Math.max(1, p * half);
         g.fillRect(x, mid - h, 1, h * 2);
       }
@@ -464,6 +493,28 @@ function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
     g.lineTo(x, top + 10);
     g.closePath();
     g.fill();
+  }
+
+  // 切る候補などの印
+  for (const m of a.marks) {
+    const x0 = xOf(m.from);
+    const x1 = xOf(m.to);
+    if (x1 < 0 || x0 > width) continue;
+    const w = Math.max(2, x1 - x0);
+    if (m.kept) {
+      g.save();
+      g.strokeStyle = colors.muted;
+      g.setLineDash([4, 3]);
+      g.lineWidth = 1.5;
+      g.strokeRect(x0 + 0.5, trackTop + 1.5, w - 1, TRACK_H - 3);
+      g.restore();
+    } else {
+      g.fillStyle = colors.cut;
+      g.fillRect(x0, trackTop, w, TRACK_H);
+      g.fillStyle = colors.cutLine;
+      g.fillRect(x0, trackTop, w, 3);
+      g.fillRect(x0, trackTop + TRACK_H - 3, w, 3);
+    }
   }
 
   // なぞった範囲

@@ -1,8 +1,9 @@
 // 作品ファイル（.teroppa）の書き出しと読み込み
-import type { Clip, Project, SourceInfo } from './project';
+import { defaultAudio, type Clip, type Project, type SourceAudio, type SourceInfo, type TrackRole } from './project';
 
 export const PROJECT_FILE_FORMAT = 'teroppa-project';
-export const PROJECT_FILE_VERSION = 1;
+/** 版の番号。新しい項目を足したら上げる（古い版のファイルも読めるようにしておく） */
+export const PROJECT_FILE_VERSION = 2;
 export const PROJECT_FILE_EXTENSION = '.teroppa';
 
 interface ProjectFile {
@@ -57,7 +58,28 @@ export function readProject(value: unknown): Project | null {
     if (!ids.has(c.sourceId) || !isTime(c.start) || !isTime(c.end) || c.end <= c.start) return null;
     clips.push({ id: c.id, sourceId: c.sourceId, start: c.start, end: c.end });
   }
-  return { name: value.name, sources, clips, nextId: value.nextId };
+  const audio: Record<string, SourceAudio> = {};
+  const rawAudio = isObject(value.audio) ? value.audio : {};
+  for (const source of sources) {
+    audio[source.id] = readAudio(rawAudio[source.id], source.audioTrackCount);
+  }
+  return { name: value.name, sources, clips, audio, nextId: value.nextId };
+}
+
+const ROLES: TrackRole[] = ['voice', 'other', 'off'];
+
+/** 音の設定を読む。ない・おかしいときは初期値（v0.1 で保存した作品など） */
+function readAudio(value: unknown, trackCount: number): SourceAudio {
+  const fallback = defaultAudio(trackCount);
+  if (!isObject(value) || !Array.isArray(value.roles) || value.roles.length !== trackCount) return fallback;
+  if (!value.roles.every((r) => ROLES.includes(r as TrackRole))) return fallback;
+  const gain = (v: unknown) => (isTime(v) && v <= 4 ? v : 1);
+  return {
+    roles: value.roles as TrackRole[],
+    voiceGain: gain(value.voiceGain),
+    otherGain: gain(value.otherGain),
+    confirmed: value.confirmed === true,
+  };
 }
 
 function readSource(s: unknown): SourceInfo | null {

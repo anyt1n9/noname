@@ -1,5 +1,5 @@
 // 開いている録画ファイルの置き場。プレビュー用の読み出し口もここで作る
-import { AudioBufferSink, CanvasSink, type Input, type InputAudioTrack, type InputVideoTrack } from 'mediabunny';
+import { AudioBufferSink, CanvasSink, type Input, type InputVideoTrack } from 'mediabunny';
 import { openInput } from './probe';
 
 /** プレビューの内部の大きさ（画面では縮めたり広げたりして表示する） */
@@ -10,10 +10,9 @@ export interface OpenSource {
   file: File;
   input: Input;
   video: InputVideoTrack;
-  /** v0.1 では1つ目の音を使う（v0.2 で声を選べるようにする） */
-  audio: InputAudioTrack | null;
   canvasSink: CanvasSink;
-  audioSink: AudioBufferSink | null;
+  /** 録画に入っている順の音。読めない音は null */
+  audioSinks: (AudioBufferSink | null)[];
 }
 
 export class SourceRegistry {
@@ -55,15 +54,16 @@ export class SourceRegistry {
     const video = await input.getPrimaryVideoTrack();
     if (!video) return null;
     const audioTracks = await input.getAudioTracks();
-    let audio: InputAudioTrack | null = audioTracks[0] ?? null;
-    if (audio && !(await audio.canDecode())) audio = null;
+    const audioSinks = await Promise.all(
+      audioTracks.map(async (t) => ((await t.canDecode()) ? new AudioBufferSink(t) : null)),
+    );
     const canvasSink = new CanvasSink(video, {
       width: PREVIEW_WIDTH,
       height: PREVIEW_HEIGHT,
       fit: 'contain',
       poolSize: 2,
     });
-    return { file, input, video, audio, canvasSink, audioSink: audio ? new AudioBufferSink(audio) : null };
+    return { file, input, video, canvasSink, audioSinks };
   }
 
   release(sourceId: string): void {

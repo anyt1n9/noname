@@ -4,11 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { guideMessage } from '../core/guide';
 import { canRedo, canUndo, createHistory, record, redo, undo, type History } from '../core/history';
 import { actionForKey } from '../core/keys';
-import { addSources, emptyProject, updateSource, usedSources, type Project, type SourceInfo } from '../core/project';
+import { addSources, emptyProject, setSourceAudio, sourceAudio, updateSource, usedSources, type Project, type SourceAudio, type SourceInfo } from '../core/project';
 import { parseProject, PROJECT_FILE_EXTENSION, serializeProject } from '../core/project-file';
+import { applyCandidates, candidateOnTimeline, candidatesLength, findCandidates, type VoiceLevel } from '../core/silence';
 import { formatClock } from '../core/time';
 import { deleteRange, moveClip, totalDuration } from '../core/timeline';
 import { LONG_STEP_SECONDS, STEP_SECONDS } from '../data/keys';
+import { CUT_STRENGTHS, DEFAULT_CUT_STRENGTH } from '../data/silence';
 import { STEPS, type StepId } from '../data/steps';
 import {
   droppedFiles,
@@ -20,17 +22,20 @@ import {
   saveTextFile,
   type PickedFile,
 } from '../media/files';
-import { PeaksStore } from '../media/peaks';
+import { AnalysisStore } from '../media/analysis';
 import { Player, type PlayerState } from '../media/player';
 import { errorText, probeFile } from '../media/probe';
 import { SourceRegistry } from '../media/registry';
 import { loadWork, saveWork } from '../media/storage';
+import { AudioDialog, LISTEN_SECONDS } from './AudioDialog';
 import { AboutDialog, BusyOverlay, DropOverlay, KeysDialog, Toast, type Notice } from './Dialogs';
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
+import { SilencePanel } from './SilencePanel';
 import { Icon } from './icons';
 import { applyTheme, loadThemePreference, saveThemePreference, THEME_LABELS, THEME_ORDER, type ThemePreference } from './theme';
-import { Timeline, type TimelineControl } from './Timeline';
+import { Timeline, type TimelineControl, type TimelineMark } from './Timeline';
+import { APP_VERSION_SHORT } from '../version';
 
 /** 録画のファイルが、作品に記録した録画と同じものか */
 function sameFile(source: SourceInfo, file: File): boolean {
@@ -63,8 +68,15 @@ export function App() {
   const [exporting, setExporting] = useState(false);
   const [ready, setReady] = useState(false);
   const [theme, setTheme] = useState<ThemePreference>(loadThemePreference);
-  const [peaksTick, setPeaksTick] = useState(0);
-  const peaks = useMemo(() => new PeaksStore(() => setPeaksTick((t) => t + 1)), []);
+  const [levelsTick, setLevelsTick] = useState(0);
+  const analysis = useMemo(() => new AnalysisStore(() => setLevelsTick((t) => t + 1)), []);
+  /** 無音カット：切る強さ・残すと決めた候補・直前に切った秒数 */
+  const [strength, setStrength] = useState(DEFAULT_CUT_STRENGTH);
+  const [kept, setKept] = useState<Set<string>>(new Set());
+  const [lastCut, setLastCut] = useState<number | null>(null);
+  /** 音の設定を開いている録画と、聴き比べている音 */
+  const [audioFor, setAudioFor] = useState<string | null>(null);
+  const [listening, setListening] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playerRef = useRef<Player | null>(null);
   const timelineControl = useRef<TimelineControl | null>(null);
@@ -78,6 +90,29 @@ export function App() {
   const missing = usedSources(project).filter((s) => !openIds.includes(s.id));
   const missingSet = useMemo(() => new Set(missing.map((s) => s.id)), [missing.map((s) => s.id).join(',')]);
   const total = totalDuration(project);
+
+  // 無音カットの候補（「間」を切る手順のときだけ）
+  const used = usedSources(project);
+  const analysisProgress = analysis.progress(used.map((s) => s.id));
+  const analysisReady = used.every((s) => analysis.isFinished(s.id));
+  const candidates = useMemo(() => {
+    if (step !== 'silence') return [];
+    const levels = new Map<string, VoiceLevel>();
+    for (const s of used) {
+      const level = analysis.voiceLevel(s.id, sourceAudio(project, s.id));
+      if (level) levels.set(s.id, level);
+    }
+    return findCandidates(project, levels, CUT_STRENGTHS[strength]);
+  }, [step, project, strength, levelsTick]);
+  const marks: TimelineMark[] = useMemo(
+    () =>
+      candidates.flatMap((c) => {
+        const span = candidateOnTimeline(project, c);
+        return span ? [{ id: c.id, from: span[0], to: span[1], kept: kept.has(c.id) }] : [];
+      }),
+    [candidates, kept],
+  );
+  const unconfirmed = used.filter((s) => s.audioTrackCount > 1 && !sourceAudio(project, s.id).confirmed);
 
   /** 作品を変える（元に戻せるように記録する） */
   const apply = useCallback((next: Project) => setHistory((h) => record(h, next)), []);
@@ -114,7 +149,7 @@ export function App() {
               const file = await handle.getFile();
               if (sameFile(s, file)) {
                 registry.set(s.id, file);
-                peaks.request(s, file);
+                analysis.request(s, file);
                 opened.push(s.id);
               }
             } else {
@@ -180,7 +215,7 @@ export function App() {
       const newHandles: Record<string, FileSystemFileHandle> = {};
       added.forEach((s, i) => {
         registry.set(s.id, accepted[i].file);
-        peaks.request(s, accepted[i].file);
+        analysis.request(s, accepted[i].file);
         const handle = accepted[i].handle;
         if (handle) newHandles[s.id] = handle;
       });
@@ -188,6 +223,9 @@ export function App() {
       setOpenIds((ids) => [...ids, ...added.map((s) => s.id)]);
       apply(next);
       setStep('import');
+      // 音が複数入っている録画は、どれが声かを選んでもらう
+      const multi = added.find((s) => s.audioTrackCount > 1);
+      if (multi) setAudioFor(multi.id);
     }
     if (errors.length > 0) setNotice({ kind: 'error', text: errors.join('\n') });
     else if (infos.length > 0) setNotice({ kind: 'info', text: `${infos.length}本の録画を入れました。` });
@@ -230,7 +268,7 @@ export function App() {
           const file = await handle.getFile();
           if (sameFile(source, file)) {
             registry.set(id, file);
-            peaks.request(source, file);
+            analysis.request(source, file);
             opened.push(id);
           }
         }
@@ -278,7 +316,7 @@ export function App() {
       if (index < 0) continue;
       const [p] = unused.splice(index, 1);
       registry.set(source.id, p.file);
-      peaks.request(source, p.file);
+      analysis.request(source, p.file);
       opened.push(source.id);
       if (p.handle) newHandles[source.id] = p.handle;
     }
@@ -389,10 +427,53 @@ export function App() {
     setStep('export');
   };
 
+  const goStep = (id: StepId) => {
+    if (id === 'export') return goExport();
+    if (id !== 'import' && (project.clips.length === 0 || missing.length > 0)) return;
+    setSelection(null);
+    setLastCut(null);
+    setKept(new Set());
+    setStep(id);
+  };
+
+  /** 無音カット：まとめて切る */
+  const cutSilences = () => {
+    const length = candidatesLength(candidates, kept);
+    const next = applyCandidates(projectRef.current, candidates, kept);
+    if (next === projectRef.current) return;
+    playerRef.current?.pause();
+    apply(next);
+    setKept(new Set());
+    setLastCut(length);
+  };
+
+  const toggleKept = (id: string) =>
+    setKept((k) => {
+      const n = new Set(k);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  /** 音の設定を変える（元に戻せる操作として記録する） */
+  const changeAudio = (sourceId: string, audio: SourceAudio) => apply(setSourceAudio(projectRef.current, sourceId, audio));
+
+  const listen = async (track: number, from: number) => {
+    if (!audioFor) return;
+    setListening(track);
+    await playerRef.current?.listen(audioFor, track, from, LISTEN_SECONDS);
+    setTimeout(() => setListening((l) => (l === track ? null : l)), LISTEN_SECONDS * 1000);
+  };
+
+  const stopListening = () => {
+    playerRef.current?.stopListening();
+    setListening(null);
+  };
+
   // キーボード操作
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyHandler.current = (e: KeyboardEvent) => {
-    if (showKeys || showAbout) return;
+    if (showKeys || showAbout || audioFor) return;
     const action = actionForKey(e, isTyping(e.target));
     if (!action) return;
     const player = playerRef.current;
@@ -476,7 +557,7 @@ export function App() {
     >
       <header class="topbar">
         <div class="brand">
-          テロッパ<small>（仮）v0.1</small>
+          テロッパ<small>（仮）{APP_VERSION_SHORT}</small>
         </div>
         <nav class="steps" aria-label="手順">
           {STEPS.map((s, i) => (
@@ -485,8 +566,8 @@ export function App() {
               <button
                 class={`step ${i === stepIndex ? 'active' : ''}`}
                 aria-current={i === stepIndex ? 'step' : undefined}
-                disabled={exporting || (s.id === 'export' && (project.clips.length === 0 || missing.length > 0))}
-                onClick={() => (s.id === 'export' ? goExport() : setStep(s.id))}
+                disabled={exporting || (s.id !== 'import' && (project.clips.length === 0 || missing.length > 0))}
+                onClick={() => goStep(s.id)}
               >
                 <span class="num">{i + 1}</span>
                 {s.label}
@@ -556,7 +637,29 @@ export function App() {
           </div>
         </section>
 
-        {step === 'export' ? (
+        {step === 'silence' ? (
+          <SilencePanel
+            progress={analysisProgress}
+            ready={analysisReady}
+            count={candidates.length}
+            length={candidatesLength(candidates, kept)}
+            keptCount={candidates.filter((c) => kept.has(c.id)).length}
+            strength={strength}
+            lastCut={lastCut}
+            unconfirmed={unconfirmed}
+            onStrength={(i) => {
+              setStrength(i);
+              setKept(new Set());
+            }}
+            onCut={cutSilences}
+            onNext={goExport}
+            onPlayResult={() => {
+              playerRef.current?.seek(0);
+              void playerRef.current?.play();
+            }}
+            onAudioSettings={setAudioFor}
+          />
+        ) : step === 'export' ? (
           <ExportPanel
             project={project}
             files={() => registry.allFiles()}
@@ -575,7 +678,9 @@ export function App() {
             onLocate={locate}
             onDelete={deleteSelection}
             onClearSelection={() => setSelection(null)}
-            onNext={goExport}
+            onNext={() => goStep('silence')}
+            nextLabel="次へ：「間」を切る"
+            onAudioSettings={setAudioFor}
           />
         )}
       </main>
@@ -586,8 +691,11 @@ export function App() {
           time={playback.time}
           playing={playback.playing}
           selection={selection}
-          peaks={peaks}
-          peaksTick={peaksTick}
+          waveform={(id) => analysis.waveform(id, sourceAudio(project, id))?.peaks}
+          binSeconds={analysis.binSeconds}
+          levelsTick={levelsTick}
+          marks={step === 'silence' && lastCut === null ? marks : undefined}
+          onToggleMark={toggleKept}
           missing={missingSet}
           disabled={exporting}
           control={timelineControl}
@@ -601,6 +709,19 @@ export function App() {
       {notice && <Toast notice={notice} onClose={() => setNotice(null)} />}
       {showKeys && <KeysDialog onClose={() => setShowKeys(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      {audioFor && project.sources.some((s) => s.id === audioFor) && (
+        <AudioDialog
+          source={project.sources.find((s) => s.id === audioFor)!}
+          audio={sourceAudio(project, audioFor)}
+          levels={(i) => analysis.track(audioFor, i)}
+          binSeconds={analysis.binSeconds}
+          listening={listening}
+          onListen={listen}
+          onStopListening={stopListening}
+          onChange={(a) => changeAudio(audioFor, a)}
+          onClose={() => setAudioFor(null)}
+        />
+      )}
       {dragOver && <DropOverlay />}
       {busy && <BusyOverlay text={busy} />}
     </div>

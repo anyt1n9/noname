@@ -18,6 +18,8 @@ interface Props {
   onDelete(): void;
   onClearSelection(): void;
   onNext(): void;
+  nextLabel: string;
+  onAudioSettings(sourceId: string): void;
 }
 
 export function GuidePanel(p: Props) {
@@ -59,7 +61,7 @@ export function GuidePanel(p: Props) {
         ) : (
           <>
             <button class="btn primary big" onClick={p.onNext}>
-              次へ：書き出し
+              {p.nextLabel}
               <Icon name="next" />
             </button>
             <button class="btn" onClick={p.onPick}>
@@ -75,8 +77,15 @@ export function GuidePanel(p: Props) {
           <ul class="source-list">
             {p.project.sources.map((s) => (
               <li key={s.id} class={missingIds.has(s.id) ? 'missing' : ''}>
-                <div class="name" title={s.name}>
-                  {s.name}
+                <div class="row">
+                  <div class="name" title={s.name}>
+                    {s.name}
+                  </div>
+                  {!missingIds.has(s.id) && s.audioTrackCount > 0 && (
+                    <button class="btn small" onClick={() => p.onAudioSettings(s.id)} title="声とゲームの音の選び方・大きさ">
+                      音の設定
+                    </button>
+                  )}
                 </div>
                 <div class="meta">
                   {missingIds.has(s.id)
@@ -89,9 +98,7 @@ export function GuidePanel(p: Props) {
         </>
       )}
       {multiAudio && (
-        <p class="note">
-          音が複数入っている録画は、いまは1つ目の音だけを使います。「自分の声」と「ゲームの音」を選べるようにするのは次の版（v0.2）です。
-        </p>
+        <p class="note">音が複数入っている録画は、「音の設定」で「あなたの声」と「ゲームの音など」を選べます。</p>
       )}
       {hasClips && (
         <p class="note">

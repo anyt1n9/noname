@@ -1,6 +1,7 @@
 // キーの一覧・お知らせ・ファイルを落とすときの表示
 import { useEffect } from 'preact/hooks';
 import { KEY_HELP } from '../data/keys';
+import { APP_VERSION } from '../version';
 
 export function KeysDialog({ onClose }: { onClose(): void }) {
   useEffect(() => {
@@ -53,7 +54,7 @@ export function AboutDialog({ onClose }: { onClose(): void }) {
   return (
     <div class="overlay" onClick={onClose}>
       <div class="dialog" role="dialog" aria-modal="true" aria-label="このソフトについて" onClick={(e) => e.stopPropagation()}>
-        <h2>テロッパ（仮）v0.1 について</h2>
+        <h2>テロッパ（仮）{APP_VERSION} について</h2>
         <div class="section-title">録画と個人情報</div>
         <ul class="steps-list about-list">
           <li>録画・編集内容は、このパソコンの中だけで使います。インターネットには送りません。</li>

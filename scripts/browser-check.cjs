@@ -25,6 +25,8 @@ function makeFixtures() {
   ff('-f lavfi -i testsrc2=size=1920x1080:rate=30 -f lavfi -i sine=frequency=440:sample_rate=48000 -f lavfi -i sine=frequency=220:sample_rate=48000 -t 6 -map 0 -map 1 -map 2 -c:v libvpx-vp9 -b:v 1M -deadline realtime -cpu-used 8 -c:a libopus', 'b.mkv');
   // 音なし・縦長・44.1kHz モノラル
   ff('-f lavfi -i testsrc2=size=640x480:rate=25 -t 3 -c:v libvpx-vp9 -b:v 300k -deadline realtime -cpu-used 8', 'c.webm');
+  // OBS のように 音1＝全部、音2＝声（2.5秒しゃべって1.5秒休む）、音3＝ゲームの音
+  ff('-f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i "aevalsrc=0.4*sin(2*PI*220*t)*lt(mod(t\\,4)\\,2.5)+0.1*sin(2*PI*1000*t):s=48000" -f lavfi -i "aevalsrc=0.4*sin(2*PI*220*t)*lt(mod(t\\,4)\\,2.5):s=48000" -f lavfi -i "aevalsrc=0.1*sin(2*PI*1000*t):s=48000" -t 20 -map 0 -map 1 -map 2 -map 3 -c:v libvpx-vp9 -b:v 600k -deadline realtime -cpu-used 8 -c:a libopus', 'e.mkv');
   ff('-f lavfi -i testsrc2=size=1080x1920:rate=30 -f lavfi -i sine=frequency=500:sample_rate=44100 -t 3 -ac 1 -c:v libvpx-vp9 -b:v 500k -deadline realtime -cpu-used 8 -c:a libvorbis', 'd.webm');
 }
 
@@ -76,8 +78,11 @@ function probe(file) {
   return JSON.parse(execSync(`ffprobe -v error -show_entries stream=codec_type,codec_name,width,height,r_frame_rate:format=duration -of json ${file}`).toString());
 }
 
+/** 上の手順の案内から、手順を選ぶ */
+const goStep = (page, label) => page.locator('nav.steps button', { hasText: label }).click();
+
 async function exportTo(page, name) {
-  await page.getByRole('button', { name: /次へ/ }).click();
+  await goStep(page, '書き出し');
   await page.getByRole('radio', { name: /軽い/ }).click();
   await page.evaluate((n) => window.__saveNames.push(n), name);
   await page.getByRole('button', { name: '書き出す' }).click();
@@ -104,12 +109,14 @@ async function main() {
   await page.waitForSelector('.guide h2');
   await page.screenshot({ path: path.join(OUT, '01-empty.png') });
 
-  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm']) await putFixture(page, n);
+  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm', 'e.mkv']) await putFixture(page, n);
 
   // 読み込み
   await page.evaluate(() => window.__pickQueue.push(['a.webm', 'b.mkv']));
   await page.getByRole('button', { name: '録画を選ぶ' }).click();
   await page.waitForSelector('.toast');
+  // b.mkv は音が2つ入っているので、音の設定が開く（そのまま決める）
+  await page.getByRole('dialog', { name: '音の設定' }).getByRole('button', { name: '決める' }).click();
   check('録画を2本読み込める', (await page.locator('.source-list li').count()) === 2);
   check('長さが合う', (await timeText(page)).endsWith('0:14.0'), await timeText(page));
   await page.screenshot({ path: path.join(OUT, '02-imported.png') });
@@ -186,12 +193,53 @@ async function main() {
   const mixed = await exportTo(page, 'mixed.mp4');
   check('形式の違う録画もまとめて書き出せる', Math.abs(Number(mixed.format.duration) - 14) < 0.1, `${mixed.format.duration}秒`);
 
+  // 声を選ぶ（v0.2）
+  await page.getByRole('button', { name: /編集に戻る/ }).click();
+  await page.getByRole('button', { name: '新しく' }).click();
+  await page.evaluate(() => window.__pickQueue.push(['e.mkv']));
+  await page.getByRole('button', { name: '録画を選ぶ' }).click();
+  const dialog = page.getByRole('dialog', { name: '音の設定' });
+  await dialog.waitFor();
+  check('音が複数ある録画では、音の設定が開く', true);
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: path.join(OUT, '09-audio-dialog.png') });
+  await dialog.getByRole('button', { name: '聴く' }).nth(1).click();
+  await page.waitForTimeout(500);
+  await dialog.getByRole('radiogroup', { name: '音1の役割' }).getByRole('radio', { name: '使わない' }).click();
+  await dialog.getByRole('radiogroup', { name: '音2の役割' }).getByRole('radio', { name: 'あなたの声' }).click();
+  await dialog.getByRole('radiogroup', { name: '音3の役割' }).getByRole('radio', { name: 'ゲームの音など' }).click();
+  await dialog.getByRole('button', { name: '決める' }).click();
+
+  // 「間」を切る（v0.2）：声は 2.5秒しゃべって1.5秒休むので、1.5秒の「間」が5か所ある
+  await page.getByRole('button', { name: /次へ：「間」を切る/ }).click();
+  await page.waitForSelector('text=か所見つけました', { timeout: 60000 });
+  const found = await page.locator('.guide p').first().innerText();
+  check('「間」を5か所見つける', found.includes('5か所'), found);
+  await page.screenshot({ path: path.join(OUT, '10-silence.png') });
+  // 最初の候補（3秒あたり）を押して残す
+  const box2 = await page.locator('.timeline-wrap canvas').boundingBox();
+  await page.mouse.click(box2.x + (3.25 / 20) * box2.width, box2.y + 26 + 22 + 40);
+  check('候補を押すと、その場所を残せる', (await page.locator('.guide p').first().innerText()).includes('1か所を残します'));
+  await page.getByRole('button', { name: 'まとめて切る' }).click();
+  await page.waitForSelector('text=「間」を切りました');
+  const afterCut = await timeText(page);
+  const seconds = (t) => t.split(':').reduce((a, b) => a * 60 + Number(b), 0);
+  const cutLength = seconds(afterCut.split(' / ')[1]);
+  // 1.5秒の「間」のうち4か所を切る（1か所は残すと決めた）。音の切り替わりの前後に音のにじみがあるので、3〜6秒くらい短くなる
+  check('まとめて切ると短くなる', cutLength > 14 && cutLength < 17, afterCut);
+  await page.screenshot({ path: path.join(OUT, '11-silence-cut.png') });
+  await page.keyboard.press('Control+z');
+  check('切ったあとも元に戻せる', (await timeText(page)).endsWith('0:20.0'), await timeText(page));
+  await page.keyboard.press('Control+y');
+  const cutOut = await exportTo(page, 'cut.mp4');
+  check('切ったあとの動画を書き出せる', Math.abs(Number(cutOut.format.duration) - cutLength) < 0.1, `${cutOut.format.duration}秒`);
+
   // 明るい画面・狭い画面
   await page.getByRole('button', { name: /編集に戻る/ }).click();
   await page.emulateMedia({ colorScheme: 'light' });
   await page.screenshot({ path: path.join(OUT, '07-light.png') });
   await page.setViewportSize({ width: 1280, height: 650 });
-  await page.getByRole('button', { name: /次へ/ }).click();
+  await goStep(page, '書き出し');
   await page.screenshot({ path: path.join(OUT, '08-export-small.png') });
 
   check('画面にエラーが出ていない', errors.length === 0, errors.join(' / '));

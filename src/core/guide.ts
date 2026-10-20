@@ -44,6 +44,6 @@ export function guideMessage(project: Project, ctx: GuideContext): GuideMessage 
   }
   return {
     title: 'いらない部分を消しましょう',
-    detail: `いまの長さは${formatLength(totalDuration(project))}です。タイムラインで消したい範囲をなぞると消せます。消すところがなければ、そのまま書き出しへ進めます。`,
+    detail: `いまの長さは${formatLength(totalDuration(project))}です。タイムラインで消したい範囲をなぞると消せます。消すところがなければ、次の手順へ進みましょう。`,
   };
 }

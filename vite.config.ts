@@ -1,7 +1,11 @@
 import { defineConfig } from 'vitest/config';
+import pkg from './package.json';
 
 export default defineConfig({
   base: './',
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   oxc: {
     jsx: { runtime: 'automatic', importSource: 'preact' },
   },

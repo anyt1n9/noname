@@ -23,6 +23,8 @@
   --ruler-text: #a6a9b0;
   --ruler-line: #4a4f58;
   --preview-bg: #000;
+  --cut: rgba(255, 92, 92, 0.42);
+  --cut-line: #ff6b6b;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   --font: system-ui, 'Segoe UI', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
 }
@@ -52,6 +54,8 @@
     --ruler-text: #5d5f66;
     --ruler-line: #c4c2bd;
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+    --cut: rgba(200, 40, 40, 0.3);
+    --cut-line: #b3261e;
   }
 }
 
@@ -79,6 +83,8 @@
   --ruler-text: #5d5f66;
   --ruler-line: #c4c2bd;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  --cut: rgba(200, 40, 40, 0.3);
+  --cut-line: #b3261e;
 }
 
 * {
@@ -740,4 +746,120 @@ kbd {
     margin: 0 -14px -14px;
     padding: 10px 14px 14px;
   }
+}
+
+/* 音の設定・切る強さ */
+.dialog.wide {
+  max-width: 760px;
+  width: min(760px, 94vw);
+  max-height: 92vh;
+  overflow: auto;
+}
+
+.dialog-text {
+  margin: 0 0 14px;
+  color: var(--muted);
+}
+
+.track-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.track-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.track-name {
+  font-weight: 700;
+  width: 42px;
+}
+
+.mini-wave {
+  border-radius: 6px;
+  flex: none;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.segmented button {
+  border: none;
+  background: var(--panel-2);
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  border-right: 1px solid var(--border);
+}
+
+.segmented button:last-child {
+  border-right: none;
+}
+
+.segmented button.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 14px;
+}
+
+.sliders label {
+  display: grid;
+  grid-template-columns: 170px 1fr 52px;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.sliders input[type='range'] {
+  accent-color: var(--accent);
+}
+
+.sliders .value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.obs-help {
+  margin: 4px 0 14px;
+}
+
+.obs-help .steps-list {
+  margin-top: 8px;
+}
+
+.strength {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hint-text {
+  font-size: 13px;
+}
+
+.source-list li .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
 }

@@ -63,23 +63,25 @@ export async function loadWork(): Promise<SavedWork | null> {
   }
 }
 
-/** 音の形（波形）の保存。同じ録画なら作り直さない */
-export interface SavedPeaks {
+/** 音の大きさの記録の保存。同じ録画なら作り直さない */
+export interface SavedLevels {
   binSeconds: number;
   peaks: Float32Array;
+  rms: Float32Array;
 }
 
-export function peaksKey(name: string, size: number, lastModified: number): string {
-  return `peaks:${name}:${size}:${lastModified}`;
+/** 録画（名前・大きさ・更新日時）と音の番号で、記録を見分ける */
+export function levelsKey(source: { name: string; size: number; lastModified: number }, track: number): string {
+  return `levels:v2:${source.name}:${source.size}:${source.lastModified}:${track}`;
 }
 
-export async function savePeaks(key: string, value: SavedPeaks): Promise<void> {
+export async function saveLevels(key: string, value: SavedLevels): Promise<void> {
   await put(key, value).catch(() => undefined);
 }
 
-export async function loadPeaks(key: string): Promise<SavedPeaks | null> {
+export async function loadLevels(key: string): Promise<SavedLevels | null> {
   try {
-    return (await get<SavedPeaks>(key)) ?? null;
+    return (await get<SavedLevels>(key)) ?? null;
   } catch {
     return null;
   }
