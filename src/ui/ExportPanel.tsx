@@ -38,13 +38,17 @@ interface Props {
   files: () => Record<string, File>;
   onBack(): void;
   onRunningChange(running: boolean): void;
+  onExportSrt(): void;
 }
 
-export function ExportPanel({ project, files, onBack, onRunningChange }: Props) {
+export function ExportPanel({ project, files, onBack, onRunningChange, onExportSrt }: Props) {
   const [quality, setQuality] = useState<QualityId>(DEFAULT_QUALITY);
   const [codecs, setCodecs] = useState<CodecChoice | null | undefined>(undefined);
   const [phase, setPhase] = useState<Phase>({ kind: 'choose' });
   const [now, setNow] = useState(Date.now());
+  /** 字幕を動画に入れるか（入れずに、YouTube の字幕機能だけを使う人もいる） */
+  const [burnSubtitles, setBurnSubtitles] = useState(true);
+  const hasSubtitles = project.subtitles.length > 0;
   const job = useRef<ExportJob | null>(null);
   const plan = planExport(project, qualityPreset(quality));
   const speed = loadSpeed();
@@ -98,7 +102,8 @@ export function ExportPanel({ project, files, onBack, onRunningChange }: Props) 
       }
     });
     job.current = j;
-    j.start(project, files(), plan, codecs, target);
+    const exportProject = burnSubtitles ? project : { ...project, subtitles: [] };
+    j.start(exportProject, files(), plan, codecs, target);
   };
 
   const cancel = () => {
@@ -147,6 +152,15 @@ export function ExportPanel({ project, files, onBack, onRunningChange }: Props) 
         <p class="note">
           公開する前に、他人の音楽・映像・画像を勝手に使っていないか確かめましょう。ゲーム実況では、ゲーム会社ごとに「動画を出してよいか」のルール（ガイドライン）があります。
         </p>
+        {hasSubtitles && (
+          <p class="note">
+            YouTube の字幕機能も使うなら、字幕ファイルも保存しておきましょう（YouTube Studio の「字幕」から読み込めます）。
+            <br />
+            <button class="btn small" onClick={onExportSrt}>
+              字幕ファイル（.srt）を保存する
+            </button>
+          </p>
+        )}
         <div class="actions sticky">
           <button class="btn primary" onClick={() => setPhase({ kind: 'choose' })}>
             もう一度書き出す
@@ -192,6 +206,12 @@ export function ExportPanel({ project, files, onBack, onRunningChange }: Props) 
           </button>
         ))}
       </div>
+      {hasSubtitles && (
+        <label class="check">
+          <input type="checkbox" checked={burnSubtitles} onChange={(e) => setBurnSubtitles((e.target as HTMLInputElement).checked)} />
+          字幕を動画に入れる
+        </label>
+      )}
       {codecs?.fallback && (
         <p class="note">
           このパソコンのブラウザでは標準の形式（H.264・AAC）で書き出せないため、{codecs.video.label}・{codecs.audio.label} で書き出します。YouTube にはそのまま上げられます。

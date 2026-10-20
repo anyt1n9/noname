@@ -10,7 +10,11 @@ import { cssColor, onThemeChange } from './theme';
 const RULER_H = 26;
 const HEADER_H = 22;
 const TRACK_H = 84;
-const HEIGHT = RULER_H + HEADER_H + TRACK_H + 6;
+/** 字幕などの段の高さ */
+const LANE_H = 26;
+const BASE_HEIGHT = RULER_H + HEADER_H + TRACK_H + 6;
+/** 段の端をつかめる幅（ピクセル） */
+const EDGE_GRAB = 6;
 /** これより小さい動きは「押しただけ」とみなす（ピクセル） */
 const DRAG_THRESHOLD = 4;
 /** 一番細かく広げたとき、1秒あたりのピクセル */
@@ -23,6 +27,26 @@ export interface TimelineMark {
   to: number;
   /** 残すと決めた候補 */
   kept: boolean;
+}
+
+/** 字幕などの段に並ぶもの（完成した動画の時刻） */
+export interface LaneItem {
+  /** 見えている部分ごとに違う手がかり */
+  key: string;
+  /** もとのもの（字幕など）の ID */
+  id: string;
+  from: number;
+  to: number;
+  text: string;
+}
+
+export interface TimelineLane {
+  id: string;
+  label: string;
+  items: LaneItem[];
+  /** 端をドラッグして長さを変えられるか */
+  resizable: boolean;
+  selectedId?: string | null;
 }
 
 export interface TimelineControl {
@@ -44,6 +68,11 @@ interface Props {
   /** 切る候補などの印（完成した動画の時刻） */
   marks?: TimelineMark[];
   onToggleMark?(id: string): void;
+  /** 映像の下に並べる段（字幕など） */
+  lanes?: TimelineLane[];
+  onLaneItemClick?(lane: string, id: string, t: number): void;
+  /** 段のものの端を動かし終えた（item はもとの位置、from〜to が新しい位置） */
+  onLaneItemResize?(lane: string, item: LaneItem, from: number, to: number): void;
   missing: Set<string>;
   disabled: boolean;
   control: { current: TimelineControl | null };
@@ -60,6 +89,7 @@ interface View {
 
 type Drag =
   | { kind: 'scrub' }
+  | { kind: 'lane'; lane: string; item: LaneItem; edge: 'start' | 'end' | null; startX: number; moved: boolean }
   | { kind: 'select'; startX: number; startT: number; moved: boolean }
   | { kind: 'reorder'; index: number; startX: number; moved: boolean; t: number };
 
@@ -78,6 +108,9 @@ interface Colors {
   accentSoft: string;
   cut: string;
   cutLine: string;
+  laneBg: string;
+  laneItem: string;
+  accentText: string;
 }
 
 function readColors(): Colors {
@@ -96,6 +129,9 @@ function readColors(): Colors {
     accentSoft: cssColor('--accent-soft'),
     cut: cssColor('--cut'),
     cutLine: cssColor('--cut-line'),
+    laneBg: cssColor('--panel'),
+    laneItem: cssColor('--lane-item'),
+    accentText: cssColor('--accent-text'),
   };
 }
 
@@ -107,6 +143,10 @@ export function Timeline(props: Props) {
   const [view, setView] = useState<View>({ pxPerSec: 10, offset: 0 });
   const [colors, setColors] = useState<Colors | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
+  /** 段のものの端を動かしている途中の位置 */
+  const [laneDraft, setLaneDraft] = useState<{ key: string; from: number; to: number } | null>(null);
+  const lanes = props.lanes ?? [];
+  const HEIGHT = BASE_HEIGHT + lanes.length * LANE_H;
   const drag = useRef<Drag | null>(null);
   const total = totalDuration(project);
   const starts = clipStarts(project);
@@ -196,6 +236,9 @@ export function Timeline(props: Props) {
       colors,
       dragIndex: drag.current?.kind === 'reorder' && drag.current.moved ? drag.current.index : null,
       dropAt,
+      lanes,
+      laneDraft,
+      height: HEIGHT,
     });
   });
 
@@ -224,8 +267,29 @@ export function Timeline(props: Props) {
       props.onSeek(t);
     } else if (y < RULER_H + HEADER_H) {
       drag.current = { kind: 'reorder', index: clipIndexAt(t), startX: e.clientX, moved: false, t };
-    } else {
+    } else if (y < RULER_H + HEADER_H + TRACK_H) {
       drag.current = { kind: 'select', startX: e.clientX, startT: t, moved: false };
+    } else {
+      // 字幕などの段
+      const lane = lanes[Math.floor((y - RULER_H - HEADER_H - TRACK_H) / LANE_H)];
+      if (!lane) return;
+      const x = e.clientX - rect.left;
+      const xOf = (v: number) => (v - offset) * view.pxPerSec;
+      let hit: { item: LaneItem; edge: 'start' | 'end' | null } | null = null;
+      for (const item of lane.items) {
+        const x0 = xOf(item.from);
+        const x1 = xOf(item.to);
+        if (lane.resizable && Math.abs(x - x0) <= EDGE_GRAB) hit = { item, edge: 'start' };
+        else if (lane.resizable && Math.abs(x - x1) <= EDGE_GRAB) hit = { item, edge: 'end' };
+        else if (x >= x0 && x <= x1) hit = { item, edge: null };
+        if (hit) break;
+      }
+      if (hit) {
+        drag.current = { kind: 'lane', lane: lane.id, item: hit.item, edge: hit.edge, startX: e.clientX, moved: false };
+      } else {
+        drag.current = { kind: 'scrub' };
+        props.onSeek(t);
+      }
     }
   };
 
@@ -240,7 +304,15 @@ export function Timeline(props: Props) {
       else if (x > width - 24) setView((v) => ({ ...v, offset: clamp(v.offset + 12 / v.pxPerSec, 0, maxOffset) }));
     }
     const t = timeAt(e.clientX);
-    if (d.kind === 'scrub') {
+    if (d.kind === 'lane') {
+      if (!d.edge) return;
+      if (!d.moved && Math.abs(e.clientX - d.startX) < 2) return;
+      d.moved = true;
+      const min = 0.1;
+      const from = d.edge === 'start' ? Math.min(t, d.item.to - min) : d.item.from;
+      const to = d.edge === 'end' ? Math.max(t, d.item.from + min) : d.item.to;
+      setLaneDraft({ key: d.item.key, from, to });
+    } else if (d.kind === 'scrub') {
       props.onSeek(t);
     } else if (d.kind === 'select') {
       if (!d.moved && Math.abs(e.clientX - d.startX) < DRAG_THRESHOLD) return;
@@ -259,6 +331,13 @@ export function Timeline(props: Props) {
     drag.current = null;
     if (!d) return;
     const t = timeAt(e.clientX);
+    if (d.kind === 'lane') {
+      const draft = laneDraft;
+      setLaneDraft(null);
+      if (d.moved && d.edge && draft) props.onLaneItemResize?.(d.lane, d.item, draft.from, draft.to);
+      else props.onLaneItemClick?.(d.lane, d.item.id, t);
+      return;
+    }
     if (d.kind === 'select') {
       if (!d.moved) {
         // 印の上を押したら、印を切り替える（切る候補なら、その場所だけ残す）
@@ -368,6 +447,9 @@ export function Timeline(props: Props) {
 }
 
 interface DrawArgs {
+  lanes: TimelineLane[];
+  laneDraft: { key: string; from: number; to: number } | null;
+  height: number;
   width: number;
   project: Project;
   starts: number[];
@@ -387,6 +469,7 @@ interface DrawArgs {
 
 function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
   const { width, project, starts, pxPerSec, offset, colors } = a;
+  const HEIGHT = a.height;
   const xOf = (t: number) => (t - offset) * pxPerSec;
   g.clearRect(0, 0, width, HEIGHT);
   g.fillStyle = colors.bg;
@@ -477,6 +560,40 @@ function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
       }
     }
     g.globalAlpha = 1;
+  });
+
+  // 字幕などの段
+  a.lanes.forEach((lane, li) => {
+    const y = RULER_H + HEADER_H + TRACK_H + li * LANE_H + 2;
+    g.fillStyle = colors.laneBg;
+    g.fillRect(0, y, width, LANE_H - 2);
+    g.font = '12px system-ui, sans-serif';
+    g.textBaseline = 'middle';
+    for (const item of lane.items) {
+      const draft = a.laneDraft?.key === item.key ? a.laneDraft : null;
+      const x0 = xOf(draft?.from ?? item.from);
+      const x1 = xOf(draft?.to ?? item.to);
+      if (x1 < 0 || x0 > width) continue;
+      const w = Math.max(2, x1 - x0 - 1);
+      const selected = lane.selectedId === item.id;
+      g.fillStyle = selected ? colors.accent : colors.laneItem;
+      roundRect(g, x0, y + 2, w, LANE_H - 6, 4);
+      g.fill();
+      if (w > 16) {
+        g.save();
+        g.beginPath();
+        g.rect(x0 + 3, y, w - 6, LANE_H);
+        g.clip();
+        g.fillStyle = selected ? colors.accentText : colors.text;
+        g.textAlign = 'left';
+        g.fillText(item.text.replace(/\n/g, ' '), x0 + 5, y + LANE_H / 2 - 1);
+        g.restore();
+      }
+    }
+    // 段の名前（左端）
+    g.fillStyle = colors.muted;
+    g.textAlign = 'right';
+    g.fillText(lane.label, width - 6, y + LANE_H / 2 - 1);
   });
 
   // 並べ替えの落とす位置

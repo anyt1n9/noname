@@ -15,6 +15,15 @@ const FIX = path.join(OUT, 'fixtures');
 fs.mkdirSync(FIX, { recursive: true });
 
 function makeFixtures() {
+  // 字幕ファイル（e.mkv の「間」を切ったあとの時刻）
+  fs.writeFileSync(
+    path.join(FIX, 'subs.srt'),
+    [
+      '1\n00:00:00,100 --> 00:00:02,200\nこんにちは、今日はボス戦です\n',
+      '2\n00:00:02,900 --> 00:00:05,000\nこのボスは実は弱点があって背中を狙うと大ダメージです\n',
+      '3\n00:00:06,000 --> 00:00:08,000\nいきます\n',
+    ].join('\n'),
+  );
   const ff = (args, name) => {
     const file = path.join(FIX, name);
     if (!fs.existsSync(file)) execSync(`ffmpeg -hide_banner -loglevel error -y ${args} ${file}`);
@@ -102,14 +111,15 @@ async function main() {
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
+  // 作業環境によっては AI の部品の配布元（huggingface.co）につながらない。そのときのエラーは数えない
+  page.on('console', (m) => m.type() === 'error' && !m.text().includes('ERR_TUNNEL_CONNECTION_FAILED') && errors.push(m.text()));
   page.on('dialog', (d) => d.accept());
   await page.addInitScript(stubPickers);
   await page.goto(APP);
   await page.waitForSelector('.guide h2');
   await page.screenshot({ path: path.join(OUT, '01-empty.png') });
 
-  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm', 'e.mkv']) await putFixture(page, n);
+  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm', 'e.mkv', 'subs.srt']) await putFixture(page, n);
 
   // 読み込み
   await page.evaluate(() => window.__pickQueue.push(['a.webm', 'b.mkv']));
@@ -233,6 +243,47 @@ async function main() {
   await page.keyboard.press('Control+y');
   const cutOut = await exportTo(page, 'cut.mp4');
   check('切ったあとの動画を書き出せる', Math.abs(Number(cutOut.format.duration) - cutLength) < 0.1, `${cutOut.format.duration}秒`);
+
+  // 字幕（v0.3）：AI の部品をダウンロードできない環境では、了承のあとに分かりやすく失敗する
+  await page.getByRole('button', { name: /編集に戻る/ }).click();
+  await goStep(page, '字幕');
+  await page.getByRole('button', { name: '自動で字幕を作る' }).click();
+  await page.waitForSelector('text=AI の部品をダウンロードします');
+  check('AI の部品をダウンロードする前に了承をとる', (await page.locator('.guide').innerText()).includes('IP アドレス'));
+  await page.screenshot({ path: path.join(OUT, '12-consent.png') });
+  await page.getByRole('button', { name: 'ダウンロードして始める' }).click();
+  const failed = await page.waitForSelector('.note.warn', { timeout: 60000 }).then(() => true, () => false);
+  check('ダウンロードできないときは、理由を出す', failed, failed ? (await page.locator('.note.warn').innerText()).replace(/\n/g, ' ') : '');
+  // 字幕ファイルを読み込んで、直す
+  await page.evaluate(() => window.__pickQueue.push(['subs.srt']));
+  await page.getByRole('button', { name: /字幕ファイル（.srt）を読み込む/ }).click();
+  await page.waitForSelector('.sub-row');
+  check('字幕ファイルを読み込める', (await page.locator('.sub-row').count()) === 3);
+  const second = page.locator('.sub-row').nth(1);
+  check('長い字幕は2行に分かれる', (await second.locator('.sub-text span').count()) === 2, await second.locator('.sub-text').innerText());
+  await page.locator('.sub-row').nth(2).locator('.sub-text').click();
+  await page.locator('.sub-row textarea').fill('いくぞ！');
+  await page.locator('.sub-row textarea').press('Control+Enter');
+  check('字幕を書き換えられる', (await page.locator('.sub-row').nth(2).innerText()).includes('いくぞ！'));
+  await page.locator('.sub-row').nth(0).getByRole('button', { name: '後ろの字幕とつなぐ' }).click();
+  check('字幕をつなげる', (await page.locator('.sub-row').count()) === 2);
+  await page.keyboard.press('Control+z');
+  check('つないだのを元に戻せる', (await page.locator('.sub-row').count()) === 3);
+  await page.getByRole('radio', { name: '黄', exact: true }).click();
+  await page.getByRole('radiogroup', { name: '字幕の大きさ' }).getByRole('radio', { name: '大' }).click();
+  await page.locator('.sub-row').nth(1).locator('.sub-time').click();
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: path.join(OUT, '13-subtitles.png') });
+  // 字幕ファイルを書き出す
+  await page.evaluate(() => window.__saveNames.push('out.srt'));
+  await page.getByRole('button', { name: /字幕ファイル（.srt）を書き出す/ }).click();
+  await page.waitForTimeout(400);
+  const srtOut = (await readOpfs(page, 'out.srt')).toString('utf8');
+  check('字幕ファイルを書き出せる', srtOut.includes('いくぞ！') && srtOut.includes('-->'), srtOut.split('\n').slice(0, 3).join(' | '));
+  // 字幕の入った動画を書き出す
+  const subOut = await exportTo(page, 'subs.mp4');
+  check('字幕の入った動画を書き出せる', Number(subOut.format.duration) > 10);
+  execSync(`ffmpeg -v error -y -ss 4 -i ${path.join(OUT, 'subs.mp4')} -frames:v 1 ${path.join(OUT, '14-burned-subtitle.png')}`);
 
   // 明るい画面・狭い画面
   await page.getByRole('button', { name: /編集に戻る/ }).click();

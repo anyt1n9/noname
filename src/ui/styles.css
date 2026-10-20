@@ -24,6 +24,7 @@
   --ruler-line: #4a4f58;
   --preview-bg: #000;
   --cut: rgba(255, 92, 92, 0.42);
+  --lane-item: #4a5568;
   --cut-line: #ff6b6b;
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
   --font: system-ui, 'Segoe UI', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
@@ -56,6 +57,7 @@
     --shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
     --cut: rgba(200, 40, 40, 0.3);
     --cut-line: #b3261e;
+    --lane-item: #c3cbd8;
   }
 }
 
@@ -85,6 +87,7 @@
   --shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
   --cut: rgba(200, 40, 40, 0.3);
   --cut-line: #b3261e;
+  --lane-item: #c3cbd8;
 }
 
 * {
@@ -299,7 +302,7 @@ button {
 
 .preview-box {
   flex: 1;
-  min-height: 0;
+  min-height: 160px;
   display: grid;
   place-items: center;
   background: var(--preview-bg);
@@ -309,9 +312,12 @@ button {
 }
 
 .preview-box canvas {
-  max-width: 100%;
-  max-height: 100%;
-  aspect-ratio: 16 / 9;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* 枠の形に合わせて、16:9 のまま縮めて表示する（切り取らない） */
+  object-fit: contain;
   display: block;
   cursor: pointer;
 }
@@ -862,4 +868,157 @@ kbd {
   align-items: center;
   gap: 8px;
   justify-content: space-between;
+}
+
+/* 字幕の手順 */
+.subtitle-panel {
+  gap: 10px;
+}
+
+.model-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quality:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.style-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.style-row .section-title {
+  margin: 0;
+}
+
+.swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatch.on {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow: auto;
+  min-height: 120px;
+  flex: 1;
+}
+
+.sub-row {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  gap: 6px;
+  align-items: start;
+  padding: 4px 6px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.sub-row.current {
+  outline: 2px solid var(--accent);
+}
+
+.sub-time {
+  border: none;
+  background: none;
+  color: var(--accent-ink);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.sub-text {
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: text;
+  padding: 3px 4px;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.sub-text:hover {
+  background: var(--panel-3);
+}
+
+.sub-edit textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+  color: var(--text);
+  resize: vertical;
+}
+
+.sub-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.sub-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sub-count.warn {
+  color: var(--danger);
+}
+
+.sub-actions {
+  display: flex;
+}
+
+.sub-actions .btn.icon {
+  width: 30px;
+  height: 30px;
+  padding: 4px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
 }

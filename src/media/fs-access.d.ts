@@ -36,3 +36,9 @@ interface Window {
   showOpenFilePicker?(options?: OpenFilePickerOptions): Promise<FileSystemFileHandle[]>;
   showSaveFilePicker?(options?: SaveFilePickerOptions): Promise<FileSystemFileHandle>;
 }
+
+// 読み込みの指定（?raw・?url）
+declare module '*?raw' {
+  const text: string;
+  export default text;
+}

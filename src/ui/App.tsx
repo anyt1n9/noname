@@ -7,8 +7,19 @@ import { actionForKey } from '../core/keys';
 import { addSources, emptyProject, setSourceAudio, sourceAudio, updateSource, usedSources, type Project, type SourceAudio, type SourceInfo } from '../core/project';
 import { parseProject, PROJECT_FILE_EXTENSION, serializeProject } from '../core/project-file';
 import { applyCandidates, candidateOnTimeline, candidatesLength, findCandidates, type VoiceLevel } from '../core/silence';
+import { importSrt, parseSrt, toSrt } from '../core/srt';
+import {
+  addSubtitleAt,
+  mergeWithNext,
+  removeSubtitle,
+  setSubtitleText,
+  setSubtitleTime,
+  splitSubtitle,
+  subtitleAt,
+  subtitlesOnTimeline,
+} from '../core/subtitles';
 import { formatClock } from '../core/time';
-import { deleteRange, moveClip, totalDuration } from '../core/timeline';
+import { deleteRange, locate as locateTime, moveClip, totalDuration } from '../core/timeline';
 import { LONG_STEP_SECONDS, STEP_SECONDS } from '../data/keys';
 import { CUT_STRENGTHS, DEFAULT_CUT_STRENGTH } from '../data/silence';
 import { STEPS, type StepId } from '../data/steps';
@@ -20,6 +31,7 @@ import {
   openTextFile,
   pickRecordings,
   saveTextFile,
+  SRT_FILE_KIND,
   type PickedFile,
 } from '../media/files';
 import { AnalysisStore } from '../media/analysis';
@@ -32,9 +44,11 @@ import { AboutDialog, BusyOverlay, DropOverlay, KeysDialog, Toast, type Notice }
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
 import { SilencePanel } from './SilencePanel';
+import { SubtitlePanel } from './SubtitlePanel';
+import { useTranscription } from './useTranscription';
 import { Icon } from './icons';
 import { applyTheme, loadThemePreference, saveThemePreference, THEME_LABELS, THEME_ORDER, type ThemePreference } from './theme';
-import { Timeline, type TimelineControl, type TimelineMark } from './Timeline';
+import { Timeline, type LaneItem, type TimelineControl, type TimelineLane, type TimelineMark } from './Timeline';
 import { APP_VERSION_SHORT } from '../version';
 
 /** 録画のファイルが、作品に記録した録画と同じものか */
@@ -116,6 +130,67 @@ export function App() {
 
   /** 作品を変える（元に戻せるように記録する） */
   const apply = useCallback((next: Project) => setHistory((h) => record(h, next)), []);
+
+  // 自動字幕
+  const transcription = useTranscription({
+    project,
+    projectRef,
+    change: (next, replace) => (replace ? setHistory((h) => ({ ...h, present: next })) : apply(next)),
+    registry,
+    analysis,
+    notify: (kind, text) => setNotice({ kind, text }),
+  });
+  const timelineSubtitles = useMemo(() => subtitlesOnTimeline(project), [project.subtitles, project.clips]);
+  const currentSubtitle = subtitleAt(project, playback.time);
+  const subtitleLane: TimelineLane | null =
+    project.subtitles.length > 0
+      ? {
+          id: 'subtitles',
+          label: '字幕',
+          items: timelineSubtitles.map((s) => ({ key: s.key, id: s.id, from: s.from, to: s.to, text: s.text })),
+          resizable: true,
+          selectedId: currentSubtitle?.id ?? null,
+        }
+      : null;
+
+  /** 字幕の端をタイムラインで動かしたとき：完成した動画の時刻を、録画の中の時刻に直す */
+  const resizeSubtitle = (item: LaneItem, from: number, to: number) => {
+    const p = projectRef.current;
+    const sub = p.subtitles.find((x) => x.id === item.id);
+    const loc = locateTime(p, (item.from + item.to) / 2);
+    if (!sub || !loc) return;
+    const toSource = (t: number) => loc.clip.start + (t - loc.clipStart);
+    const start = Math.abs(from - item.from) > 1e-6 ? toSource(from) : sub.start;
+    const end = Math.abs(to - item.to) > 1e-6 ? toSource(to) : sub.end;
+    apply(setSubtitleTime(p, sub.id, start, end));
+  };
+
+  const exportSrt = async () => {
+    try {
+      const p = projectRef.current;
+      if (await saveTextFile(`${p.name || '字幕'}.srt`, toSrt(p), SRT_FILE_KIND)) {
+        setNotice({ kind: 'info', text: '字幕ファイル（.srt）を保存しました。YouTube Studio の「字幕」から読み込めます。' });
+      }
+    } catch (e) {
+      setNotice({ kind: 'error', text: `字幕ファイルを保存できませんでした（${errorText(e)}）` });
+    }
+  };
+
+  const importSrtFile = async () => {
+    try {
+      const file = await openTextFile(SRT_FILE_KIND);
+      if (!file) return;
+      const r = importSrt(projectRef.current, parseSrt(await file.text()));
+      if (r.count === 0) {
+        setNotice({ kind: 'error', text: '字幕ファイルから字幕を読み取れませんでした。' });
+        return;
+      }
+      apply(r.project);
+      setNotice({ kind: 'info', text: `${r.count}個の字幕を読み込みました。` });
+    } catch (e) {
+      setNotice({ kind: 'error', text: `字幕ファイルを読み込めませんでした（${errorText(e)}）` });
+    }
+  };
 
   // プレビュー
   useEffect(() => {
@@ -652,12 +727,46 @@ export function App() {
               setKept(new Set());
             }}
             onCut={cutSilences}
-            onNext={goExport}
+            onNext={() => goStep('subtitles')}
             onPlayResult={() => {
               playerRef.current?.seek(0);
               void playerRef.current?.play();
             }}
             onAudioSettings={setAudioFor}
+          />
+        ) : step === 'subtitles' ? (
+          <SubtitlePanel
+            project={project}
+            items={timelineSubtitles}
+            currentId={currentSubtitle?.id ?? null}
+            phase={transcription.phase}
+            modelId={transcription.modelId}
+            usable={transcription.usable}
+            remaining={transcription.remaining}
+            analysisReady={analysisReady}
+            analysisProgress={analysisProgress}
+            onModel={transcription.setModelId}
+            onTranscribe={() => {
+              playerRef.current?.pause();
+              transcription.request();
+            }}
+            onConsent={transcription.consent}
+            onCancelConsent={transcription.cancelConsent}
+            onCancel={transcription.cancel}
+            onSeek={(t) => playerRef.current?.seek(t)}
+            onText={(id, text) => apply(setSubtitleText(projectRef.current, id, text))}
+            onSplit={(id, at) => apply(splitSubtitle(projectRef.current, id, at))}
+            onMerge={(id) => apply(mergeWithNext(projectRef.current, id))}
+            onRemove={(id) => apply(removeSubtitle(projectRef.current, id))}
+            onAdd={() => {
+              const r = addSubtitleAt(projectRef.current, playerRef.current?.currentTime() ?? 0, '（ここに文字を入れる）');
+              if (r.id) apply(r.project);
+              else setNotice({ kind: 'info', text: 'ここにはすでに字幕があるか、字幕を足す余地がありません。' });
+            }}
+            onStyle={(style) => apply({ ...projectRef.current, subtitleStyle: style })}
+            onExportSrt={exportSrt}
+            onImportSrt={importSrtFile}
+            onNext={goExport}
           />
         ) : step === 'export' ? (
           <ExportPanel
@@ -665,6 +774,7 @@ export function App() {
             files={() => registry.allFiles()}
             onBack={() => setStep('import')}
             onRunningChange={setExporting}
+            onExportSrt={exportSrt}
           />
         ) : (
           <GuidePanel
@@ -696,6 +806,9 @@ export function App() {
           levelsTick={levelsTick}
           marks={step === 'silence' && lastCut === null ? marks : undefined}
           onToggleMark={toggleKept}
+          lanes={subtitleLane ? [subtitleLane] : []}
+          onLaneItemClick={(_lane, _id, t) => playerRef.current?.seek(t)}
+          onLaneItemResize={(_lane, item, from, to) => resizeSubtitle(item, from, to)}
           missing={missingSet}
           disabled={exporting}
           control={timelineControl}

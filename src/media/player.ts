@@ -3,6 +3,7 @@ import type { AudioBufferSink } from 'mediabunny';
 import { activeTracks, emptyProject, sourceAudio, type Clip, type Project } from '../core/project';
 import { clamp } from '../core/time';
 import { clipLength, clipStarts, locate, totalDuration } from '../core/timeline';
+import { drawOverlays, overlaysReady, prepareOverlays } from './compose';
 import { PREVIEW_HEIGHT, PREVIEW_WIDTH, type SourceRegistry } from './registry';
 
 /** 再生を始めるまでの余裕（秒）。最初の映像と音を用意する時間 */
@@ -177,6 +178,7 @@ export class Player {
           // 表示が間に合わなかったコマは飛ばす
           if (this.currentTime() > hideAt + 0.05) continue;
           this.draw2d.drawImage(frame.canvas, 0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+          this.overlay(Math.max(showAt, this.currentTime()));
         }
       } catch (e) {
         if (gen === this.generation) console.warn('プレビューの映像を読めませんでした', e);
@@ -322,9 +324,18 @@ export class Player {
       if (token !== this.drawToken || this.playingNow) return;
       if (frame) this.draw2d.drawImage(frame.canvas, 0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
       else this.clear();
+      this.overlay(time);
     } catch (e) {
       console.warn('プレビューの映像を読めませんでした', e);
     }
+  }
+
+  /** 字幕などを重ねる。フォントがまだなら読み込み、止まっていれば描き直す */
+  private overlay(t: number): void {
+    if (!overlaysReady(this.project, t)) {
+      void prepareOverlays(this.project, t).then(() => this.refresh());
+    }
+    drawOverlays(this.draw2d, this.project, t, PREVIEW_WIDTH, PREVIEW_HEIGHT);
   }
 
   private clear(): void {

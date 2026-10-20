@@ -1,9 +1,15 @@
 // 作品ファイル（.teroppa）の書き出しと読み込み
-import { defaultAudio, type Clip, type Project, type SourceAudio, type SourceInfo, type TrackRole } from './project';
+import {
+  DEFAULT_SUBTITLE_STYLE,
+  SUBTITLE_POSITIONS,
+  SUBTITLE_SIZES,
+  type SubtitleStyle,
+} from '../data/subtitle-style';
+import { defaultAudio, type Clip, type Project, type SourceAudio, type SourceInfo, type Subtitle, type TrackRole } from './project';
 
 export const PROJECT_FILE_FORMAT = 'teroppa-project';
 /** 版の番号。新しい項目を足したら上げる（古い版のファイルも読めるようにしておく） */
-export const PROJECT_FILE_VERSION = 2;
+export const PROJECT_FILE_VERSION = 3;
 export const PROJECT_FILE_EXTENSION = '.teroppa';
 
 interface ProjectFile {
@@ -63,7 +69,40 @@ export function readProject(value: unknown): Project | null {
   for (const source of sources) {
     audio[source.id] = readAudio(rawAudio[source.id], source.audioTrackCount);
   }
-  return { name: value.name, sources, clips, audio, nextId: value.nextId };
+  const subtitles: Subtitle[] = [];
+  if (Array.isArray(value.subtitles)) {
+    for (const t of value.subtitles) {
+      // おかしな字幕は読み飛ばす（作品全体は開けるようにする）
+      if (!isObject(t) || typeof t.id !== 'string' || typeof t.sourceId !== 'string' || typeof t.text !== 'string') continue;
+      if (!ids.has(t.sourceId) || !isTime(t.start) || !isTime(t.end) || t.end <= t.start) continue;
+      subtitles.push({ id: t.id, sourceId: t.sourceId, start: t.start, end: t.end, text: t.text });
+    }
+  }
+  const transcribed: Record<string, [number, number][]> = {};
+  if (isObject(value.transcribed)) {
+    for (const [id, ranges] of Object.entries(value.transcribed)) {
+      if (!ids.has(id) || !Array.isArray(ranges)) continue;
+      transcribed[id] = ranges.filter((r): r is [number, number] => Array.isArray(r) && isTime(r[0]) && isTime(r[1]) && r[1] > r[0]);
+    }
+  }
+  return {
+    name: value.name,
+    sources,
+    clips,
+    audio,
+    subtitles,
+    subtitleStyle: readSubtitleStyle(value.subtitleStyle),
+    transcribed,
+    nextId: value.nextId,
+  };
+}
+
+function readSubtitleStyle(value: unknown): SubtitleStyle {
+  if (!isObject(value)) return DEFAULT_SUBTITLE_STYLE;
+  const color = typeof value.color === 'string' && /^#[0-9a-f]{6}$/i.test(value.color) ? value.color : DEFAULT_SUBTITLE_STYLE.color;
+  const size = SUBTITLE_SIZES.find((s) => s.value === value.size)?.value ?? DEFAULT_SUBTITLE_STYLE.size;
+  const position = SUBTITLE_POSITIONS.find((p) => p.value === value.position)?.value ?? DEFAULT_SUBTITLE_STYLE.position;
+  return { color, size, position };
 }
 
 const ROLES: TrackRole[] = ['voice', 'other', 'off'];

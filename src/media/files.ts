@@ -85,14 +85,35 @@ export async function pickExportTarget(suggestedName: string): Promise<FileSyste
   }
 }
 
-/** 作品ファイルを保存する。保存したら true */
-export async function saveTextFile(suggestedName: string, text: string): Promise<boolean> {
+export interface TextFileKind {
+  description: string;
+  mime: string;
+  extension: string;
+  id: string;
+}
+
+export const PROJECT_FILE_KIND: TextFileKind = {
+  description: 'テロッパの作品ファイル',
+  mime: 'application/json',
+  extension: PROJECT_FILE_EXTENSION,
+  id: 'project',
+};
+
+export const SRT_FILE_KIND: TextFileKind = {
+  description: '字幕ファイル（.srt）',
+  mime: 'text/plain',
+  extension: '.srt',
+  id: 'srt',
+};
+
+/** 文字のファイル（作品ファイル・字幕ファイル）を保存する。保存したら true */
+export async function saveTextFile(suggestedName: string, text: string, kind: TextFileKind = PROJECT_FILE_KIND): Promise<boolean> {
   if (window.showSaveFilePicker) {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName,
-        types: [{ description: 'テロッパの作品ファイル', accept: { 'application/json': [PROJECT_FILE_EXTENSION] } }],
-        id: 'project',
+        types: [{ description: kind.description, accept: { [kind.mime]: [kind.extension] } }],
+        id: kind.id,
       });
       const w = await handle.createWritable();
       await w.write(text);
@@ -104,7 +125,7 @@ export async function saveTextFile(suggestedName: string, text: string): Promise
     }
   }
   // 保存の機能がないブラウザでは、ダウンロードとして保存する
-  const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+  const url = URL.createObjectURL(new Blob([text], { type: kind.mime }));
   const a = document.createElement('a');
   a.href = url;
   a.download = suggestedName;
@@ -113,13 +134,13 @@ export async function saveTextFile(suggestedName: string, text: string): Promise
   return true;
 }
 
-/** 作品ファイルを選んで読む。選ばなかったら null */
-export async function openTextFile(): Promise<File | null> {
+/** 文字のファイル（作品ファイル・字幕ファイル）を選んで読む。選ばなかったら null */
+export async function openTextFile(kind: TextFileKind = PROJECT_FILE_KIND): Promise<File | null> {
   if (window.showOpenFilePicker) {
     try {
       const [handle] = await window.showOpenFilePicker({
-        types: [{ description: 'テロッパの作品ファイル', accept: { 'application/json': [PROJECT_FILE_EXTENSION] } }],
-        id: 'project',
+        types: [{ description: kind.description, accept: { [kind.mime]: [kind.extension] } }],
+        id: kind.id,
       });
       return handle.getFile();
     } catch (e) {
@@ -127,7 +148,7 @@ export async function openTextFile(): Promise<File | null> {
       throw e;
     }
   }
-  const [file] = await pickWithInput(PROJECT_FILE_EXTENSION, false);
+  const [file] = await pickWithInput(kind.extension, false);
   return file ?? null;
 }
 

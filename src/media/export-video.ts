@@ -4,6 +4,7 @@ import type { ExportPlan } from '../core/export-plan';
 import { FrameScheduler } from '../core/frames';
 import type { Project } from '../core/project';
 import { clipLength } from '../core/timeline';
+import { drawOverlays, hasOverlays, prepareOverlays } from './compose';
 
 export interface VideoContextForExport {
   project: Project;
@@ -22,15 +23,32 @@ export async function writeVideo(ctx: VideoContextForExport): Promise<void> {
   let black: VideoSample | null = null;
   let outStart = 0;
 
+  // 字幕などを重ねるときは、出力の大きさのキャンバスに描いてから書く
+  const compose = hasOverlays(ctx.project);
+  const canvas = compose ? new OffscreenCanvas(plan.width, plan.height) : null;
+  const g = canvas?.getContext('2d') ?? null;
+
   const emit = async (sample: VideoSample, from: number, to: number) => {
     const [first, last] = scheduler.take(from, to);
     for (let k = first; k < last; k++) {
       checkCanceled();
-      const copy = sample.clone();
-      copy.setTimestamp(scheduler.timeOf(k));
-      copy.setDuration(frameDuration);
-      await source.add(copy);
-      copy.close();
+      const t = scheduler.timeOf(k);
+      if (canvas && g) {
+        await prepareOverlays(ctx.project, t);
+        g.fillStyle = '#000';
+        g.fillRect(0, 0, plan.width, plan.height);
+        sample.drawWithFit(g, { fit: 'contain' });
+        drawOverlays(g, ctx.project, t, plan.width, plan.height);
+        const frame = new VideoSample(canvas, { timestamp: t, duration: frameDuration });
+        await source.add(frame);
+        frame.close();
+      } else {
+        const copy = sample.clone();
+        copy.setTimestamp(t);
+        copy.setDuration(frameDuration);
+        await source.add(copy);
+        copy.close();
+      }
     }
     onProgress(scheduler.timeOf(last));
   };

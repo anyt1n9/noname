@@ -1,5 +1,6 @@
 // 作品（プロジェクト）のデータ。元の録画は書き換えず、
 // 「どの録画の、どこからどこまでを、どの順に使うか」だけを持つ。
+import { DEFAULT_SUBTITLE_STYLE, type SubtitleStyle } from '../data/subtitle-style';
 
 /** 読み込んだ録画の情報 */
 export interface SourceInfo {
@@ -47,6 +48,18 @@ export interface SourceAudio {
   confirmed: boolean;
 }
 
+/**
+ * 字幕。録画の中の時刻で持つので、「間」を切ったり並べ替えたりしても映像とずれない。
+ * text の改行（\n）で2行にする。
+ */
+export interface Subtitle {
+  id: string;
+  sourceId: string;
+  start: number;
+  end: number;
+  text: string;
+}
+
 export interface Project {
   /** 作品名。書き出すファイル名にも使う */
   name: string;
@@ -55,12 +68,26 @@ export interface Project {
   clips: Clip[];
   /** 録画の ID → 音の設定 */
   audio: Record<string, SourceAudio>;
+  /** 字幕（録画ごと・時刻の順） */
+  subtitles: Subtitle[];
+  subtitleStyle: SubtitleStyle;
+  /** 録画の ID → 文字起こしを済ませた範囲（録画の中の時刻）。続きから文字起こしするために使う */
+  transcribed: Record<string, [number, number][]>;
   /** 次に使う番号（ID を作るため） */
   nextId: number;
 }
 
 export function emptyProject(): Project {
-  return { name: '', sources: [], clips: [], audio: {}, nextId: 1 };
+  return {
+    name: '',
+    sources: [],
+    clips: [],
+    audio: {},
+    subtitles: [],
+    subtitleStyle: DEFAULT_SUBTITLE_STYLE,
+    transcribed: {},
+    nextId: 1,
+  };
 }
 
 /** 音の設定の初期値。1つ目の音を「あなたの声」にし、ほかは使わない（v0.1 と同じ動き） */

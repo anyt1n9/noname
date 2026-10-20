@@ -20,7 +20,9 @@ export type IconName =
   | 'trash'
   | 'next'
   | 'back'
-  | 'info';
+  | 'info'
+  | 'join'
+  | 'scissors';
 
 const PATHS: Record<IconName, string> = {
   play: 'M8 5v14l11-7z',
@@ -41,6 +43,8 @@ const PATHS: Record<IconName, string> = {
   next: 'M9 5l7 7-7 7',
   back: 'M15 5l-7 7 7 7',
   info: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18M12 11v6M12 7.5v.5',
+  join: 'M4 12h6M14 12h6M10 8l4 4-4 4',
+  scissors: 'M6 6a2.5 2.5 0 1 0 0 .1M6 18a2.5 2.5 0 1 0 0 .1M8 7.5l12 9M8 16.5l12-9',
 };
 
 const FILLED: Partial<Record<IconName, boolean>> = { play: true, pause: true };
