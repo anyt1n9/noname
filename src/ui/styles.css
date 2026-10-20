@@ -1,0 +1,743 @@
+/* 色の決まり。テーマ色はオレンジ */
+:root {
+  color-scheme: dark;
+  --bg: #16171a;
+  --panel: #202226;
+  --panel-2: #2a2d33;
+  --panel-3: #33373e;
+  --text: #f1f1f3;
+  --muted: #a6a9b0;
+  --border: #393d45;
+  --accent: #ff8a3d;
+  --accent-text: #1b1206;
+  --accent-ink: #ffa060;
+  --accent-soft: rgba(255, 138, 61, 0.18);
+  --danger: #ff7b7b;
+  --danger-soft: rgba(255, 123, 123, 0.14);
+  --info-soft: rgba(140, 170, 220, 0.14);
+  --clip-a: #3a4150;
+  --clip-b: #444b5c;
+  --clip-header: #2c313b;
+  --clip-missing: #5a3a3a;
+  --wave: #c6cfdf;
+  --ruler-text: #a6a9b0;
+  --ruler-line: #4a4f58;
+  --preview-bg: #000;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --font: system-ui, 'Segoe UI', 'Hiragino Sans', 'Yu Gothic UI', 'Meiryo', sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    color-scheme: light;
+    --bg: #f3f2f0;
+    --panel: #ffffff;
+    --panel-2: #efeeec;
+    --panel-3: #e4e2df;
+    --text: #1d1d1f;
+    --muted: #5d5f66;
+    --border: #d6d4d0;
+    --accent: #c2540a;
+    --accent-text: #ffffff;
+    --accent-ink: #b84a00;
+    --accent-soft: rgba(194, 84, 10, 0.14);
+    --danger: #b3261e;
+    --danger-soft: rgba(179, 38, 30, 0.1);
+    --info-soft: rgba(60, 90, 150, 0.1);
+    --clip-a: #c9d0dc;
+    --clip-b: #b9c2d1;
+    --clip-header: #dde2ea;
+    --clip-missing: #e7c2c2;
+    --wave: #3d4a60;
+    --ruler-text: #5d5f66;
+    --ruler-line: #c4c2bd;
+    --shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+  }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f3f2f0;
+  --panel: #ffffff;
+  --panel-2: #efeeec;
+  --panel-3: #e4e2df;
+  --text: #1d1d1f;
+  --muted: #5d5f66;
+  --border: #d6d4d0;
+  --accent: #c2540a;
+  --accent-text: #ffffff;
+  --accent-ink: #b84a00;
+  --accent-soft: rgba(194, 84, 10, 0.14);
+  --danger: #b3261e;
+  --danger-soft: rgba(179, 38, 30, 0.1);
+  --info-soft: rgba(60, 90, 150, 0.1);
+  --clip-a: #c9d0dc;
+  --clip-b: #b9c2d1;
+  --clip-header: #dde2ea;
+  --clip-missing: #e7c2c2;
+  --wave: #3d4a60;
+  --ruler-text: #5d5f66;
+  --ruler-line: #c4c2bd;
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.app {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%;
+  min-width: 900px;
+  min-height: 600px;
+}
+
+/* 上の帯 */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 18px;
+  white-space: nowrap;
+}
+
+.brand small {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.step:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.step .num {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.step.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.step.active .num {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.step-arrow {
+  color: var(--muted);
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-sep {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* ボタン */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--panel-3);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--accent);
+}
+
+.btn.big {
+  padding: 12px 22px;
+  font-size: 17px;
+}
+
+.btn.icon {
+  padding: 6px;
+  width: 36px;
+  height: 36px;
+}
+
+.btn.small {
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
+.btn svg {
+  width: 20px;
+  height: 20px;
+  flex: none;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* 真ん中（プレビューと案内） */
+.workspace {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 16px;
+  padding: 16px;
+  min-height: 0;
+}
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.preview-box {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  background: var(--preview-bg);
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+}
+
+.preview-box canvas {
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 16 / 9;
+  display: block;
+  cursor: pointer;
+}
+
+.preview-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: #bbb;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.preview-empty svg {
+  width: 56px;
+  height: 56px;
+  opacity: 0.6;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.time {
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.time strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* 案内 */
+.guide {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.guide h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+.guide p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions.sticky {
+  position: sticky;
+  bottom: -18px;
+  margin: 0 -18px -18px;
+  padding: 12px 18px 18px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  z-index: 2;
+}
+
+.actions.column {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 4px 0 -6px;
+}
+
+.source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-list li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 14px;
+}
+
+.source-list .name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-list .meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.source-list li.missing {
+  background: var(--danger-soft);
+}
+
+.note {
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--info-soft);
+  color: var(--text);
+}
+
+.note.warn {
+  background: var(--danger-soft);
+}
+
+/* 書き出し */
+.quality-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quality {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 2px solid var(--border);
+  background: var(--panel-2);
+  cursor: pointer;
+  text-align: left;
+}
+
+.quality.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.quality .dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--muted);
+  flex: none;
+}
+
+.quality.selected .dot {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 45%, transparent 50%);
+}
+
+.quality .label {
+  font-weight: 700;
+}
+
+.quality .desc {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.quality .size {
+  font-size: 12px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.progress {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  overflow: hidden;
+}
+
+.progress > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s;
+}
+
+.steps-list {
+  margin: 0;
+  padding-left: 22px;
+  font-size: 14px;
+}
+
+.steps-list li + li {
+  margin-top: 4px;
+}
+
+/* タイムライン */
+.timeline-area {
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 8px 16px 12px;
+}
+
+.timeline-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.timeline-bar .title {
+  font-weight: 700;
+}
+
+.timeline-bar .hint {
+  color: var(--muted);
+  font-size: 13px;
+  flex: 1;
+}
+
+.timeline-wrap {
+  position: relative;
+}
+
+.timeline-wrap canvas {
+  display: block;
+  width: 100%;
+  touch-action: none;
+  border-radius: 8px;
+}
+
+.timeline-scroll {
+  width: 100%;
+  margin: 6px 0 0;
+  accent-color: var(--accent);
+}
+
+.selection-actions {
+  position: absolute;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  z-index: 5;
+  white-space: nowrap;
+}
+
+/* お知らせ・重なる画面 */
+.toast {
+  position: fixed;
+  left: 28px;
+  top: 66px;
+  max-width: min(640px, calc(100vw - 460px));
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  z-index: 20;
+  white-space: pre-line;
+}
+
+.toast.error {
+  border-color: var(--danger);
+}
+
+.toast .text {
+  flex: 1;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: grid;
+  place-items: center;
+  z-index: 30;
+}
+
+.dialog {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px;
+  min-width: 360px;
+  max-width: 560px;
+  box-shadow: var(--shadow);
+}
+
+.dialog h2 {
+  margin: 0 0 12px;
+  font-size: 19px;
+}
+
+.keys-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 16px;
+}
+
+.keys-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.keys-table td:first-child {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+kbd {
+  font-family: var(--font);
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 13px;
+}
+
+.about-list {
+  margin: 10px 0 14px;
+}
+
+.about-text {
+  margin: 10px 0 16px;
+  font-size: 14px;
+}
+
+.dialog a {
+  color: var(--accent-ink);
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 12px;
+  border: 3px dashed var(--accent);
+  border-radius: 16px;
+  background: var(--accent-soft);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  font-weight: 700;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.busy {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 4px solid var(--panel-3);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 縦が短い画面（ノートパソコンなど）では、案内を詰める */
+@media (max-height: 720px) {
+  .workspace {
+    padding: 12px 16px;
+    gap: 12px;
+  }
+
+  .guide {
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .guide h2 {
+    font-size: 17px;
+  }
+
+  .guide p {
+    font-size: 14px;
+  }
+
+  .btn.big {
+    padding: 9px 18px;
+    font-size: 16px;
+  }
+
+  .actions.sticky {
+    bottom: -14px;
+    margin: 0 -14px -14px;
+    padding: 10px 14px 14px;
+  }
+}
