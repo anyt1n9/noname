@@ -392,8 +392,10 @@ export function Timeline(props: Props) {
         <span class="hint">
           {total <= 0
             ? '録画を入れると、ここに並びます。'
-            : props.marks && props.marks.length > 0
+            : props.marks && props.marks.length > 0 && props.onToggleMark
               ? '赤い印が切る候補です。押すと、その場所だけ残せます（もう一度押すと候補に戻ります）。'
+              : props.marks && props.marks.length > 0
+                ? '赤い印のところが動画から消えます。'
               : '下の段をなぞると、その範囲を消せます。上の名前の帯をドラッグすると、順番を変えられます。'}
         </span>
         <button class="btn icon ghost" title="縮小（−）" aria-label="縮小" onClick={() => props.control.current?.zoomOut()} disabled={total <= 0}>

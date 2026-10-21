@@ -10,6 +10,7 @@ import { applyCandidates, candidateOnTimeline, candidatesLength, findCandidates,
 import { importSrt, parseSrt, toSrt } from '../core/srt';
 import {
   addSubtitleAt,
+  cutSubtitle,
   mergeWithNext,
   removeSubtitle,
   setSubtitleText,
@@ -91,6 +92,8 @@ export function App() {
   /** 音の設定を開いている録画と、聴き比べている音 */
   const [audioFor, setAudioFor] = useState<string | null>(null);
   const [listening, setListening] = useState<number | null>(null);
+  /** 文章で編集：動画から消すか確かめている字幕 */
+  const [pendingCut, setPendingCut] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playerRef = useRef<Player | null>(null);
   const timelineControl = useRef<TimelineControl | null>(null);
@@ -503,6 +506,7 @@ export function App() {
   };
 
   const goStep = (id: StepId) => {
+    setPendingCut(null);
     if (id === 'export') return goExport();
     if (id !== 'import' && (project.clips.length === 0 || missing.length > 0)) return;
     setSelection(null);
@@ -758,6 +762,17 @@ export function App() {
             onSplit={(id, at) => apply(splitSubtitle(projectRef.current, id, at))}
             onMerge={(id) => apply(mergeWithNext(projectRef.current, id))}
             onRemove={(id) => apply(removeSubtitle(projectRef.current, id))}
+            pendingCutId={pendingCut}
+            onAskCut={(id) => {
+              setPendingCut(id);
+              const piece = timelineSubtitles.find((x) => x.id === id);
+              if (piece) playerRef.current?.seek(piece.from);
+            }}
+            onConfirmCut={() => {
+              if (pendingCut) apply(cutSubtitle(projectRef.current, pendingCut));
+              setPendingCut(null);
+            }}
+            onCancelCut={() => setPendingCut(null)}
             onAdd={() => {
               const r = addSubtitleAt(projectRef.current, playerRef.current?.currentTime() ?? 0, '（ここに文字を入れる）');
               if (r.id) apply(r.project);
@@ -804,8 +819,14 @@ export function App() {
           waveform={(id) => analysis.waveform(id, sourceAudio(project, id))?.peaks}
           binSeconds={analysis.binSeconds}
           levelsTick={levelsTick}
-          marks={step === 'silence' && lastCut === null ? marks : undefined}
-          onToggleMark={toggleKept}
+          marks={
+            step === 'silence' && lastCut === null
+              ? marks
+              : step === 'subtitles' && pendingCut
+                ? timelineSubtitles.filter((x) => x.id === pendingCut).map((x) => ({ id: x.key, from: x.from, to: x.to, kept: false }))
+                : undefined
+          }
+          onToggleMark={step === 'silence' ? toggleKept : undefined}
           lanes={subtitleLane ? [subtitleLane] : []}
           onLaneItemClick={(_lane, _id, t) => playerRef.current?.seek(t)}
           onLaneItemResize={(_lane, item, from, to) => resizeSubtitle(item, from, to)}

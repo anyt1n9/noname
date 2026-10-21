@@ -274,6 +274,20 @@ async function main() {
   await page.locator('.sub-row').nth(1).locator('.sub-time').click();
   await page.waitForTimeout(800);
   await page.screenshot({ path: path.join(OUT, '13-subtitles.png') });
+  // 文章で編集（v0.4）：2行目（2.9〜5.0秒。かたまりの境目をまたがない）の部分を動画から消す
+  const beforeCut = await timeText(page);
+  await page.locator('.sub-row').nth(1).getByRole('button', { name: 'この部分を動画から消す' }).click();
+  await page.waitForSelector('.sub-confirm');
+  check('消す前に、どこが消えるかを確かめる', (await page.locator('.sub-confirm').innerText()).includes('動画から消しますか'));
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(OUT, '13b-text-cut.png') });
+  await page.locator('.sub-confirm').getByRole('button', { name: '消す' }).click();
+  const afterTextCut = await timeText(page);
+  const sec = (t) => t.split(' / ')[1].split(':').reduce((a, b) => a * 60 + Number(b), 0);
+  check('字幕の行を消すと、その部分の動画も消える', (await page.locator('.sub-row').count()) === 2 && Math.abs(sec(beforeCut) - sec(afterTextCut) - 2.1) < 0.15, `${beforeCut} → ${afterTextCut}`);
+  await page.keyboard.press('Control+z');
+  check('文章で消したのも元に戻せる', (await page.locator('.sub-row').count()) === 3 && (await timeText(page)).endsWith(beforeCut.split(' / ')[1]));
+
   // 字幕ファイルを書き出す
   await page.evaluate(() => window.__saveNames.push('out.srt'));
   await page.getByRole('button', { name: /字幕ファイル（.srt）を書き出す/ }).click();

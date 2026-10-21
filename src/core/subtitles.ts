@@ -2,7 +2,7 @@
 import { NEW_SUBTITLE_SECONDS } from '../data/subtitle-style';
 import { breakLines, textLength, type CaptionPiece } from './captions';
 import type { Project, Subtitle } from './project';
-import { clipLength, locate, sourceRangeOnTimeline } from './timeline';
+import { clipLength, locate, removeSourceRanges, sourceRangeOnTimeline } from './timeline';
 
 /** タイムラインに見えている字幕（1つの字幕が、カットで2つ以上に分かれて見えることもある） */
 export interface TimelineSubtitle {
@@ -216,4 +216,15 @@ export function markTranscribed(project: Project, sourceId: string, range: [numb
 export function untranscribedRanges(project: Project, sourceId: string): [number, number][] {
   const used = project.clips.filter((c) => c.sourceId === sourceId).map((c): [number, number] => [c.start, c.end]);
   return subtractRanges(used, project.transcribed[sourceId] ?? []).filter(([a, b]) => b - a >= 0.3);
+}
+
+/**
+ * 文章で編集：字幕の行を消すと、その部分の動画も消える。
+ * 字幕の時間（録画の中の時刻）を動画から取り除き、字幕も消す。
+ */
+export function cutSubtitle(project: Project, id: string): Project {
+  const s = project.subtitles.find((x) => x.id === id);
+  if (!s) return project;
+  const cut = removeSourceRanges(project, [{ sourceId: s.sourceId, start: s.start, end: s.end }]);
+  return removeSubtitle(cut, id);
 }

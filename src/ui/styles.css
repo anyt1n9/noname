@@ -1022,3 +1022,14 @@ kbd {
   height: 18px;
   accent-color: var(--accent);
 }
+
+.sub-confirm {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  font-size: 13px;
+}

@@ -5,6 +5,7 @@ import { importSrt, parseSrt, srtTime, toSrt } from '../src/core/srt';
 import {
   addSubtitleAt,
   addSubtitles,
+  cutSubtitle,
   markTranscribed,
   mergeRanges,
   mergeWithNext,
@@ -18,7 +19,7 @@ import {
   untranscribedRanges,
 } from '../src/core/subtitles';
 import { chunksToSegments, speechWindows } from '../src/core/transcribe-plan';
-import { deleteRange, moveClip } from '../src/core/timeline';
+import { deleteRange, moveClip, totalDuration } from '../src/core/timeline';
 
 function source(name: string, duration: number): Omit<SourceInfo, 'id'> {
   return { name, size: 1, lastModified: 0, startTime: 0, endTime: duration, width: 1280, height: 720, frameRate: 30, videoCodec: 'vp9', audioTrackCount: 1 };
@@ -193,5 +194,26 @@ describe('作品ファイルの字幕', () => {
     expect(r.ok && r.project.subtitles).toEqual(p.subtitles);
     expect(r.ok && r.project.subtitleStyle).toEqual(p.subtitleStyle);
     expect(r.ok && r.project.transcribed).toEqual({ s1: [[0, 5]] });
+  });
+});
+
+describe('文章で編集（v0.4）', () => {
+  it('字幕の行を消すと、その部分の動画も消える', () => {
+    const p = cutSubtitle(withSubs(), 't6');
+    expect(totalDuration(p)).toBeCloseTo(30 - 2, 6);
+    expect(p.subtitles.map((s) => s.text)).toEqual(['こんにちは', 'いきます']);
+    // 後ろの字幕は、消した分だけ前に出る
+    expect(subtitleAt(p, 10 - 2 + 0.5)?.text).toBe('いきます');
+  });
+
+  it('一部がすでにカットされている字幕でも消せる', () => {
+    const p = cutSubtitle(deleteRange(withSubs(), 4.5, 5), 't6');
+    expect(totalDuration(p)).toBeCloseTo(30 - 2, 6);
+    expect(subtitlesOnTimeline(p).some((s) => s.text === '今日はボス戦です')).toBe(false);
+  });
+
+  it('ない字幕なら何もしない', () => {
+    const p = withSubs();
+    expect(cutSubtitle(p, 'nai')).toBe(p);
   });
 });

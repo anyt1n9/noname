@@ -39,6 +39,11 @@ interface Props {
   onSplit(id: string, at: number): void;
   onMerge(id: string): void;
   onRemove(id: string): void;
+  /** 文章で編集：この行の部分を動画から消す（まず確かめる） */
+  pendingCutId: string | null;
+  onAskCut(id: string): void;
+  onConfirmCut(): void;
+  onCancelCut(): void;
   onAdd(): void;
   onStyle(style: SubtitleStyle): void;
   onExportSrt(): void;
@@ -49,11 +54,15 @@ interface Props {
 function SubtitleRow(p: {
   item: TimelineSubtitle;
   current: boolean;
+  pendingCut: boolean;
   onSeek(): void;
   onText(text: string): void;
   onSplit(at: number): void;
   onMerge(): void;
   onRemove(): void;
+  onAskCut(): void;
+  onConfirmCut(): void;
+  onCancelCut(): void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(p.item.text);
@@ -65,6 +74,9 @@ function SubtitleRow(p: {
   useEffect(() => {
     if (p.current && !editing) rowRef.current?.scrollIntoView({ block: 'nearest' });
   }, [p.current]);
+  useEffect(() => {
+    if (p.pendingCut) rowRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [p.pendingCut]);
   useEffect(() => {
     if (editing) ref.current?.focus();
   }, [editing]);
@@ -121,6 +133,9 @@ function SubtitleRow(p: {
         </button>
       )}
       <div class="sub-actions">
+        <button class="btn icon ghost" title="この部分を動画から消す（文章で編集）" aria-label="この部分を動画から消す" onClick={p.onAskCut}>
+          <Icon name="scissors" />
+        </button>
         <button class="btn icon ghost" title="後ろの字幕とつなぐ" aria-label="後ろの字幕とつなぐ" onClick={p.onMerge}>
           <Icon name="join" />
         </button>
@@ -128,6 +143,21 @@ function SubtitleRow(p: {
           <Icon name="trash" />
         </button>
       </div>
+      {p.pendingCut && (
+        <div class="sub-confirm" role="alert">
+          <span>
+            この部分（{formatClock(p.item.from, true)}〜{formatClock(p.item.to, true)}）を動画から消しますか？ タイムラインの赤い印のところが消えます。
+          </span>
+          <span class="actions">
+            <button class="btn primary small" onClick={p.onConfirmCut}>
+              消す
+            </button>
+            <button class="btn small" onClick={p.onCancelCut}>
+              やめる
+            </button>
+          </span>
+        </div>
+      )}
     </li>
   );
 }
@@ -273,13 +303,17 @@ export function SubtitlePanel(p: Props) {
               ))}
             </div>
           </div>
-          <div class="section-title">字幕の一覧（{p.items.length}）— 押すと書き換えられます</div>
+          <div class="section-title">字幕の一覧（{p.items.length}）— 押すと書き換えられます。はさみで、その部分を動画から消せます</div>
           <ul class="sub-list">
             {p.items.map((item) => (
               <SubtitleRow
                 key={item.key}
                 item={item}
                 current={item.id === p.currentId}
+                pendingCut={item.id === p.pendingCutId}
+                onAskCut={() => p.onAskCut(item.id)}
+                onConfirmCut={p.onConfirmCut}
+                onCancelCut={p.onCancelCut}
                 onSeek={() => p.onSeek(item.from + 0.01)}
                 onText={(t) => p.onText(item.id, t)}
                 onSplit={(at) => p.onSplit(item.id, at)}
