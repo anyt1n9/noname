@@ -4,7 +4,7 @@ import { peakBetween } from '../core/peaks';
 import type { Project } from '../core/project';
 import { clamp, formatClock } from '../core/time';
 import { clipLength, clipStarts, dropIndex, totalDuration } from '../core/timeline';
-import { Icon } from './icons';
+import { Icon, type IconName } from './icons';
 import { cssColor, onThemeChange } from './theme';
 
 const RULER_H = 26;
@@ -73,6 +73,10 @@ interface Props {
   onLaneItemClick?(lane: string, id: string, t: number): void;
   /** 段のものの端を動かし終えた（item はもとの位置、from〜to が新しい位置） */
   onLaneItemResize?(lane: string, item: LaneItem, from: number, to: number): void;
+  /** フェードを入れたつなぎ目の時刻 */
+  joinMarks?: number[];
+  /** なぞった範囲に出すボタン（「消す」の前に並べる） */
+  selectionAction?: { label: string; icon: IconName; onClick(): void };
   missing: Set<string>;
   disabled: boolean;
   control: { current: TimelineControl | null };
@@ -239,6 +243,7 @@ export function Timeline(props: Props) {
       lanes,
       laneDraft,
       height: HEIGHT,
+      joinMarks: props.joinMarks ?? [],
     });
   });
 
@@ -422,7 +427,13 @@ export function Timeline(props: Props) {
         />
         {selection && selX && !disabled && (
           <div class="selection-actions" style={{ left: `${selCenter}px`, top: `${RULER_H + HEADER_H + 10}px` }}>
-            <button class="btn primary small" title="なぞった範囲を消す（Delete）" onClick={props.onDelete}>
+            {props.selectionAction && (
+              <button class="btn primary small" onClick={props.selectionAction.onClick}>
+                <Icon name={props.selectionAction.icon} />
+                {props.selectionAction.label}
+              </button>
+            )}
+            <button class={`btn small ${props.selectionAction ? '' : 'primary'}`} title="なぞった範囲を消す（Delete）" onClick={props.onDelete}>
               <Icon name="trash" />
               消す（{formatClock(selection[1] - selection[0], true)}）
             </button>
@@ -449,6 +460,7 @@ export function Timeline(props: Props) {
 }
 
 interface DrawArgs {
+  joinMarks: number[];
   lanes: TimelineLane[];
   laneDraft: { key: string; from: number; to: number } | null;
   height: number;
@@ -597,6 +609,20 @@ function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
     g.textAlign = 'right';
     g.fillText(lane.label, width - 6, y + LANE_H / 2 - 1);
   });
+
+  // フェードを入れたつなぎ目（明るさが下がって上がる山の形）
+  for (const t of a.joinMarks) {
+    const x = xOf(t);
+    if (x < -10 || x > width + 10) continue;
+    g.fillStyle = colors.accent;
+    g.beginPath();
+    g.moveTo(x - 9, trackTop + 2);
+    g.lineTo(x, trackTop + 14);
+    g.lineTo(x + 9, trackTop + 2);
+    g.closePath();
+    g.fill();
+    g.fillRect(x - 1, trackTop, 2, TRACK_H);
+  }
 
   // 並べ替えの落とす位置
   if (a.dropAt !== null && a.dragIndex !== null) {

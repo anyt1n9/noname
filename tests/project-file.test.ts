@@ -17,7 +17,7 @@ describe('作品ファイル', () => {
   it('保存して読み込むと同じ作品に戻る', () => {
     const p = sample();
     const result = parseProject(serializeProject(p, '2026-10-20T00:00:00.000Z'));
-    expect(result).toEqual({ ok: true, project: p });
+    expect(result).toEqual({ ok: true, project: p, assetData: {} });
   });
 
   it('ほかのファイルは読まない', () => {

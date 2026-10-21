@@ -37,6 +37,10 @@ function makeFixtures() {
   // OBS のように 音1＝全部、音2＝声（2.5秒しゃべって1.5秒休む）、音3＝ゲームの音
   ff('-f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i "aevalsrc=0.4*sin(2*PI*220*t)*lt(mod(t\\,4)\\,2.5)+0.1*sin(2*PI*1000*t):s=48000" -f lavfi -i "aevalsrc=0.4*sin(2*PI*220*t)*lt(mod(t\\,4)\\,2.5):s=48000" -f lavfi -i "aevalsrc=0.1*sin(2*PI*1000*t):s=48000" -t 20 -map 0 -map 1 -map 2 -map 3 -c:v libvpx-vp9 -b:v 600k -deadline realtime -cpu-used 8 -c:a libopus', 'e.mkv');
   ff('-f lavfi -i testsrc2=size=1080x1920:rate=30 -f lavfi -i sine=frequency=500:sample_rate=44100 -t 3 -ac 1 -c:v libvpx-vp9 -b:v 500k -deadline realtime -cpu-used 8 -c:a libvorbis', 'd.webm');
+  // v0.5：真っ黒な録画（画像やフェードを見分けやすい）・赤い画像・自分で用意した曲の代わり
+  ff('-f lavfi -i color=c=black:size=1280x720:rate=30 -f lavfi -i "aevalsrc=0.4*sin(2*PI*220*t)*lt(mod(t\\,4)\\,2):s=48000" -t 8 -c:v libvpx-vp9 -b:v 300k -deadline realtime -cpu-used 8 -c:a libopus', 'f.webm');
+  ff('-f lavfi -i color=c=red:size=400x200 -frames:v 1', 'red.png');
+  ff('-f lavfi -i sine=frequency=880:sample_rate=44100 -t 3', 'tone.wav');
 }
 
 // ファイルを選ぶ画面・保存する場所を選ぶ画面の代わり
@@ -119,7 +123,7 @@ async function main() {
   await page.waitForSelector('.guide h2');
   await page.screenshot({ path: path.join(OUT, '01-empty.png') });
 
-  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm', 'e.mkv', 'subs.srt']) await putFixture(page, n);
+  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm', 'e.mkv', 'subs.srt', 'f.webm', 'red.png', 'tone.wav']) await putFixture(page, n);
 
   // 読み込み
   await page.evaluate(() => window.__pickQueue.push(['a.webm', 'b.mkv']));
@@ -298,6 +302,124 @@ async function main() {
   const subOut = await exportTo(page, 'subs.mp4');
   check('字幕の入った動画を書き出せる', Number(subOut.format.duration) > 10);
   execSync(`ffmpeg -v error -y -ss 4 -i ${path.join(OUT, 'subs.mp4')} -frames:v 1 ${path.join(OUT, '14-burned-subtitle.png')}`);
+
+  // 飾り・BGM・効果音（v0.5）：真っ黒な録画と、模様の録画をつなぐ
+  await page.getByRole('button', { name: /編集に戻る/ }).click();
+  await page.getByRole('button', { name: '新しく' }).click();
+  await page.evaluate(() => window.__pickQueue.push(['f.webm', 'a.webm']));
+  await page.getByRole('button', { name: '録画を選ぶ' }).click();
+  await page.waitForSelector('.toast');
+  await goStep(page, '飾り');
+  await page.waitForSelector('text=画像や演出を入れましょう');
+  // 1〜3秒をなぞって、画像を置く
+  const box3 = await page.locator('.timeline-wrap canvas').boundingBox();
+  const x3 = (t) => box3.x + (t / 16) * box3.width;
+  await page.mouse.move(x3(1), box3.y + 26 + 22 + 40);
+  await page.mouse.down();
+  await page.mouse.move(x3(3), box3.y + 26 + 22 + 40, { steps: 6 });
+  await page.mouse.up();
+  await page.evaluate(() => window.__pickQueue.push(['red.png']));
+  await page.locator('.selection-actions').getByRole('button', { name: 'ここに画像を置く' }).click();
+  await page.waitForSelector('.item-list li');
+  check('なぞった範囲に画像を置ける', (await page.locator('.decorate-panel .item-list li').count()) === 1);
+  await page.waitForSelector('.image-handles');
+  check('置いた画像を、プレビューの上で動かせる枠が出る', true);
+  const red = async () =>
+    page.evaluate(() => {
+      const c = document.querySelector('.preview-box canvas');
+      const g = c.getContext('2d');
+      const d = (x, y) => Array.from(g.getImageData(x, y, 1, 1).data.slice(0, 3));
+      return { topRight: d(1100, 100), center: d(640, 360) };
+    });
+  await page.waitForTimeout(500);
+  let px = await red();
+  check('画像は右上に出る', px.topRight[0] > 200 && px.topRight[1] < 60 && px.center[0] < 40, JSON.stringify(px));
+  await page.getByRole('radiogroup', { name: '画像の置き方' }).getByRole('radio', { name: '中央' }).click();
+  await page.waitForTimeout(400);
+  px = await red();
+  check('置き方を「中央」に変えられる', px.center[0] > 200 && px.topRight[0] < 40, JSON.stringify(px));
+  // 枠をドラッグして左へ動かす
+  const hb = await page.locator('.image-handles').boundingBox();
+  await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(hb.x + hb.width / 2 - 150, hb.y + hb.height / 2, { steps: 6 });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+  const hb2 = await page.locator('.image-handles').boundingBox();
+  check('画像をドラッグで動かせる', hb2.x < hb.x - 100, `${Math.round(hb.x)} → ${Math.round(hb2.x)}`);
+  await page.getByRole('radiogroup', { name: '画像の置き方' }).getByRole('radio', { name: '右上' }).click();
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(OUT, '15-decorate.png') });
+  // つなぎ目（8秒）にフェード
+  await page.locator('.timeline-wrap canvas').click({ position: { x: (7.8 / 16) * box3.width, y: 26 + 22 + 40 } });
+  await page.getByRole('checkbox', { name: /0:08 のつなぎ目をフェードにする/ }).check();
+  check('つなぎ目にフェードを入れられる', await page.getByRole('checkbox', { name: /0:08 のつなぎ目/ }).isChecked());
+  // BGM と効果音
+  await page.getByRole('button', { name: /次へ：BGM・効果音/ }).click();
+  await page.waitForSelector('text=BGM と効果音を入れましょう');
+  await page.getByRole('radio', { name: /おだやか/ }).click();
+  await page.screenshot({ path: path.join(OUT, '16a-bgm.png') });
+  await page.getByRole('button', { name: 'おだやかを試しに聴く' }).click();
+  await page.waitForSelector('button[aria-label="おだやかを止める"]', { timeout: 10000 });
+  check('入っている曲を試しに聴ける', true);
+  await page.getByRole('button', { name: 'おだやかを止める' }).click();
+  await page.locator('.timeline-wrap canvas').click({ position: { x: (5 / 16) * box3.width, y: 26 + 22 + 40 } });
+  await page.locator('.sound-cell').first().getByRole('button', { name: 'ピコン', exact: true }).click();
+  check('効果音を再生位置に置ける', (await page.locator('.sound-panel .item-list li').count()) === 1);
+  await page.screenshot({ path: path.join(OUT, '16-sound.png') });
+  const deco = await exportTo(page, 'deco.mp4');
+  const decoFile = path.join(OUT, 'deco.mp4');
+  check('飾りと BGM の入った動画を書き出せる', Math.abs(Number(deco.format.duration) - 16) < 0.1, `${deco.format.duration}秒`);
+  // 書き出した動画を調べる：2秒の右上は赤、8秒（つなぎ目）は真っ黒、BGM は声がない間（2.5秒あたり）も鳴っている
+  const frameAt = (t) => {
+    const raw = execSync(`ffmpeg -v error -ss ${t} -i ${decoFile} -frames:v 1 -vf scale=64:36 -f rawvideo -pix_fmt rgb24 -`);
+    return (x, y) => Array.from(raw.subarray((y * 64 + x) * 3, (y * 64 + x) * 3 + 3));
+  };
+  const f2 = frameAt(2);
+  check('書き出した動画に画像が入っている', f2(55, 5)[0] > 180 && f2(55, 5)[1] < 80, JSON.stringify(f2(55, 5)));
+  const f6 = frameAt(6);
+  check('画像は、置いた時間のあとは消える', f6(55, 5)[0] < 40, JSON.stringify(f6(55, 5)));
+  // つなぎ目（8秒）の直後は暗く、少しあとは模様が見える
+  const brightness = (f) => {
+    let sum = 0;
+    for (let y = 0; y < 36; y += 3) for (let x = 0; x < 64; x += 3) sum += f(x, y).reduce((a, b) => a + b, 0) / 3;
+    return sum / (12 * 22);
+  };
+  const dark = brightness(frameAt(8.05));
+  const bright = brightness(frameAt(9));
+  check('つなぎ目のフェードで画面が暗くなる', dark < bright * 0.3, `${Math.round(dark)} / ${Math.round(bright)}`);
+  execSync(`ffmpeg -v error -y -ss 8.2 -i ${decoFile} -frames:v 1 ${path.join(OUT, '18-fade.png')}`);
+  execSync(`ffmpeg -v error -y -ss 2 -i ${decoFile} -frames:v 1 ${path.join(OUT, '17-exported-image.png')}`);
+  const rms = (from, len) => {
+    const out = execSync(`ffmpeg -v info -ss ${from} -t ${len} -i ${decoFile} -af astats=metadata=0 -f null - 2>&1`).toString();
+    const m = /RMS level dB: (-?[\d.]+|-inf)/.exec(out.split('Overall')[1] ?? '');
+    return m ? Number(m[1] === '-inf' ? -200 : m[1]) : NaN;
+  };
+  const quiet = rms(2.6, 1);
+  check('しゃべっていない間も BGM が鳴っている', quiet > -45, `${quiet}dB`);
+  const fadeQuiet = rms(7.95, 0.1);
+  check('つなぎ目のフェードで音も小さくなる', fadeQuiet < quiet + 6, `${fadeQuiet}dB`);
+  // 自分で用意した曲（著作権の確認をしてから選ぶ）
+  await page.getByRole('button', { name: /編集に戻る/ }).click();
+  await goStep(page, 'BGM・効果音');
+  await page.getByRole('button', { name: '自分で用意した曲を使う' }).click();
+  check('自分で用意した曲を選ぶ前に、著作権の注意を出す', (await page.locator('.note.rights').innerText()).includes('著作権'));
+  await page.evaluate(() => window.__pickQueue.push(['tone.wav']));
+  await page.getByRole('button', { name: '確かめたので、曲を選ぶ' }).click();
+  await page.waitForSelector('text=tone.wav', { timeout: 10000 });
+  check('自分で用意した曲を BGM にできる', await page.getByRole('radio', { name: /tone\.wav/ }).getAttribute('aria-checked') === 'true');
+  const own = await exportTo(page, 'own-bgm.mp4');
+  check('自分で用意した曲の入った動画を書き出せる', Math.abs(Number(own.format.duration) - 16) < 0.1, `${own.format.duration}秒`);
+  // 作品ファイルに画像と曲も入る
+  await page.evaluate(() => window.__saveNames.push('deco.teroppa'));
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(600);
+  const decoSaved = JSON.parse((await readOpfs(page, 'deco.teroppa')).toString('utf8'));
+  check(
+    '作品ファイルに画像と曲も入る',
+    decoSaved.project.images.length === 1 && Object.keys(decoSaved.assetData).length === 2 && decoSaved.project.effects.length === 1,
+    `画像${decoSaved.project.images.length}・中身${Object.keys(decoSaved.assetData).length}`,
+  );
 
   // 明るい画面・狭い画面
   await page.getByRole('button', { name: /編集に戻る/ }).click();

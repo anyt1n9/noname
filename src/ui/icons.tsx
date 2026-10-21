@@ -22,7 +22,12 @@ export type IconName =
   | 'back'
   | 'info'
   | 'join'
-  | 'scissors';
+  | 'scissors'
+  | 'image'
+  | 'music'
+  | 'bell'
+  | 'fade'
+  | 'stop';
 
 const PATHS: Record<IconName, string> = {
   play: 'M8 5v14l11-7z',
@@ -45,9 +50,14 @@ const PATHS: Record<IconName, string> = {
   info: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18M12 11v6M12 7.5v.5',
   join: 'M4 12h6M14 12h6M10 8l4 4-4 4',
   scissors: 'M6 6a2.5 2.5 0 1 0 0 .1M6 18a2.5 2.5 0 1 0 0 .1M8 7.5l12 9M8 16.5l12-9',
+  image: 'M4 5h16v14H4zM4 16l5-5 4 4 2-2 5 5M15.5 8.5a1 1 0 1 0 0 .1',
+  music: 'M9 18V6l10-2v12M9 18a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0M19 16a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0',
+  bell: 'M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0',
+  fade: 'M3 18L12 6l9 12M3 18h18',
+  stop: 'M7 7h10v10H7z',
 };
 
-const FILLED: Partial<Record<IconName, boolean>> = { play: true, pause: true };
+const FILLED: Partial<Record<IconName, boolean>> = { play: true, pause: true, stop: true };
 
 export function Icon({ name }: IconProps) {
   const filled = FILLED[name];

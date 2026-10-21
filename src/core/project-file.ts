@@ -5,27 +5,48 @@ import {
   SUBTITLE_SIZES,
   type SubtitleStyle,
 } from '../data/subtitle-style';
-import { defaultAudio, type Clip, type Project, type SourceAudio, type SourceInfo, type Subtitle, type TrackRole } from './project';
+import { IMAGE_PLACES, type ImagePlace } from '../data/images';
+import { DEFAULT_BGM_VOLUME, musicTrack } from '../data/music';
+import { isSoundId } from '../data/sfx';
+import {
+  defaultAudio,
+  type Asset,
+  type BgmSetting,
+  type Clip,
+  type ImageOverlay,
+  type Project,
+  type SoundEffect,
+  type SourceAudio,
+  type SourceInfo,
+  type SourceRange,
+  type Subtitle,
+  type TrackRole,
+} from './project';
 
 export const PROJECT_FILE_FORMAT = 'teroppa-project';
 /** 版の番号。新しい項目を足したら上げる（古い版のファイルも読めるようにしておく） */
-export const PROJECT_FILE_VERSION = 3;
+export const PROJECT_FILE_VERSION = 4;
 export const PROJECT_FILE_EXTENSION = '.teroppa';
+
+/** 画像・曲の中身（Asset の id → base64 の文字） */
+export type AssetData = Record<string, string>;
 
 interface ProjectFile {
   format: typeof PROJECT_FILE_FORMAT;
   version: number;
   savedAt: string;
   project: Project;
+  /** 画像・曲の中身。作品ファイルだけで、別のパソコンでも画像や曲を使えるようにする */
+  assetData: AssetData;
 }
 
 /** 作品を文字にする。savedAt は保存した日時（ISO 形式） */
-export function serializeProject(project: Project, savedAt: string): string {
-  const file: ProjectFile = { format: PROJECT_FILE_FORMAT, version: PROJECT_FILE_VERSION, savedAt, project };
+export function serializeProject(project: Project, savedAt: string, assetData: AssetData = {}): string {
+  const file: ProjectFile = { format: PROJECT_FILE_FORMAT, version: PROJECT_FILE_VERSION, savedAt, project, assetData };
   return JSON.stringify(file, null, 1);
 }
 
-export type ParseResult = { ok: true; project: Project } | { ok: false; error: string };
+export type ParseResult = { ok: true; project: Project; assetData: AssetData } | { ok: false; error: string };
 
 /** 作品ファイルを読む。おかしなところがあれば、その理由を返す */
 export function parseProject(text: string): ParseResult {
@@ -43,7 +64,14 @@ export function parseProject(text: string): ParseResult {
   }
   const project = readProject(data.project);
   if (!project) return { ok: false, error: '作品ファイルが壊れているようです。' };
-  return { ok: true, project };
+  const assetData: AssetData = {};
+  if (isObject(data.assetData)) {
+    for (const asset of project.assets) {
+      const v = data.assetData[asset.id];
+      if (typeof v === 'string' && /^[A-Za-z0-9+/]*={0,2}$/.test(v)) assetData[asset.id] = v;
+    }
+  }
+  return { ok: true, project, assetData };
 }
 
 /** 保存しておいた作品（自動保存など）を確かめながら読む。おかしければ null */
@@ -85,6 +113,33 @@ export function readProject(value: unknown): Project | null {
       transcribed[id] = ranges.filter((r): r is [number, number] => Array.isArray(r) && isTime(r[0]) && isTime(r[1]) && r[1] > r[0]);
     }
   }
+  const assets: Asset[] = [];
+  if (Array.isArray(value.assets)) {
+    for (const a of value.assets) {
+      const asset = readAsset(a);
+      if (asset && !assets.some((x) => x.id === asset.id)) assets.push(asset);
+    }
+  }
+  const assetIds = new Set(assets.map((a) => a.id));
+  const images: ImageOverlay[] = [];
+  if (Array.isArray(value.images)) {
+    for (const i of value.images) {
+      const image = readImage(i, ids, assetIds);
+      if (image) images.push(image);
+    }
+  }
+  const effects: SoundEffect[] = [];
+  if (Array.isArray(value.effects)) {
+    for (const e of value.effects) {
+      if (!isObject(e) || typeof e.id !== 'string' || !isSoundId(e.sound)) continue;
+      if (typeof e.sourceId !== 'string' || !ids.has(e.sourceId) || !isTime(e.time)) continue;
+      effects.push({ id: e.id, sound: e.sound, sourceId: e.sourceId, time: e.time });
+    }
+  }
+  const clipIds = new Set(clips.map((c) => c.id));
+  const joinFades = Array.isArray(value.joinFades)
+    ? value.joinFades.filter((id): id is string => typeof id === 'string' && clipIds.has(id))
+    : [];
   return {
     name: value.name,
     sources,
@@ -93,8 +148,55 @@ export function readProject(value: unknown): Project | null {
     subtitles,
     subtitleStyle: readSubtitleStyle(value.subtitleStyle),
     transcribed,
+    assets,
+    images,
+    effects,
+    effectsVolume: isTime(value.effectsVolume) && value.effectsVolume <= 2 ? value.effectsVolume : 1,
+    bgm: readBgm(value.bgm, assets),
+    joinFades: [...new Set(joinFades)],
+    endFade: value.endFade === true,
     nextId: value.nextId,
   };
+}
+
+function readAsset(a: unknown): Asset | null {
+  if (!isObject(a) || typeof a.id !== 'string' || !/^[0-9a-f]{16,64}$/.test(a.id)) return null;
+  if (a.kind !== 'image' && a.kind !== 'music') return null;
+  if (typeof a.name !== 'string' || typeof a.type !== 'string') return null;
+  if (!isTime(a.size) || !isTime(a.width) || !isTime(a.height) || !isTime(a.duration)) return null;
+  return { id: a.id, kind: a.kind, name: a.name, type: a.type, size: a.size, width: a.width, height: a.height, duration: a.duration };
+}
+
+const PLACES: ImagePlace[] = [...IMAGE_PLACES.map((p) => p.value), 'free'];
+
+function readImage(i: unknown, sourceIds: Set<string>, assetIds: Set<string>): ImageOverlay | null {
+  if (!isObject(i) || typeof i.id !== 'string' || typeof i.assetId !== 'string' || !assetIds.has(i.assetId)) return null;
+  if (!Array.isArray(i.ranges) || !PLACES.includes(i.place as ImagePlace)) return null;
+  const ranges: SourceRange[] = [];
+  for (const r of i.ranges) {
+    if (!isObject(r) || typeof r.sourceId !== 'string' || !sourceIds.has(r.sourceId)) continue;
+    if (!isTime(r.start) || !isTime(r.end) || r.end <= r.start) continue;
+    ranges.push({ sourceId: r.sourceId, start: r.start, end: r.end });
+  }
+  if (ranges.length === 0) return null;
+  const unit = (v: unknown, max: number) => isTime(v) && v <= max;
+  if (!unit(i.x, 1) || !unit(i.y, 1) || !unit(i.w, 1) || i.w === 0) return null;
+  return { id: i.id, assetId: i.assetId, ranges, place: i.place as ImagePlace, x: i.x as number, y: i.y as number, w: i.w as number };
+}
+
+function readBgm(value: unknown, assets: Asset[]): BgmSetting | null {
+  if (!isObject(value) || !isObject(value.track)) return null;
+  const track = value.track;
+  let result: BgmSetting['track'];
+  if (track.kind === 'builtin' && typeof track.id === 'string' && musicTrack(track.id)) {
+    result = { kind: 'builtin', id: track.id };
+  } else if (track.kind === 'asset' && typeof track.assetId === 'string' && assets.some((a) => a.id === track.assetId && a.kind === 'music')) {
+    result = { kind: 'asset', assetId: track.assetId };
+  } else {
+    return null;
+  }
+  const volume = isTime(value.volume) && value.volume <= 2 ? value.volume : DEFAULT_BGM_VOLUME;
+  return { track: result, volume, duck: value.duck !== false };
 }
 
 function readSubtitleStyle(value: unknown): SubtitleStyle {

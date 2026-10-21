@@ -1,10 +1,28 @@
 // 画面全体。作品のデータ・再生・保存をまとめる
 import { Fragment } from 'preact';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { speechOnTimeline } from '../core/bgm';
+import { addEffect, effectLength, effectsOnTimeline, removeEffect } from '../core/effects';
+import { activeJoinFades, fadeSourceChanges, nearestJoin, toggleJoinFade } from '../core/fades';
 import { guideMessage } from '../core/guide';
+import { addImage, imagesAt, imagesOnTimeline, moveImage, removeImage, setImagePlace, setImageTime, type PlaceRect } from '../core/images';
 import { canRedo, canUndo, createHistory, record, redo, undo, type History } from '../core/history';
 import { actionForKey } from '../core/keys';
-import { addSources, emptyProject, setSourceAudio, sourceAudio, updateSource, usedSources, type Project, type SourceAudio, type SourceInfo } from '../core/project';
+import {
+  addAsset,
+  addSources,
+  dropUnusedAssets,
+  emptyProject,
+  setSourceAudio,
+  sourceAudio,
+  updateSource,
+  usedAssetIds,
+  usedSources,
+  type BgmSetting,
+  type Project,
+  type SourceAudio,
+  type SourceInfo,
+} from '../core/project';
 import { parseProject, PROJECT_FILE_EXTENSION, serializeProject } from '../core/project-file';
 import { applyCandidates, candidateOnTimeline, candidatesLength, findCandidates, type VoiceLevel } from '../core/silence';
 import { importSrt, parseSrt, toSrt } from '../core/srt';
@@ -21,12 +39,18 @@ import {
 } from '../core/subtitles';
 import { formatClock } from '../core/time';
 import { deleteRange, locate as locateTime, moveClip, totalDuration } from '../core/timeline';
+import { NEW_IMAGE_SECONDS } from '../data/images';
 import { LONG_STEP_SECONDS, STEP_SECONDS } from '../data/keys';
+import { DEFAULT_BGM_VOLUME, musicTrack } from '../data/music';
+import type { SoundId } from '../data/sfx';
 import { CUT_STRENGTHS, DEFAULT_CUT_STRENGTH } from '../data/silence';
 import { STEPS, type StepId } from '../data/steps';
 import {
   droppedFiles,
   ensureReadPermission,
+  IMAGE_FILE_KIND,
+  MUSIC_FILE_KIND,
+  pickMediaFile,
   isProjectFileName,
   isRecordingFileName,
   openTextFile,
@@ -36,14 +60,20 @@ import {
   type PickedFile,
 } from '../media/files';
 import { AnalysisStore } from '../media/analysis';
+import { assetBlob, decodeAssets, encodeAssets, forgetAssetsExcept, keepAsset, readImageFile, readMusicFile } from '../media/assets';
+import { setImageSource } from '../media/compose';
 import { Player, type PlayerState } from '../media/player';
 import { errorText, probeFile } from '../media/probe';
-import { SourceRegistry } from '../media/registry';
+import { PREVIEW_HEIGHT, PREVIEW_WIDTH, SourceRegistry } from '../media/registry';
+import { assetMusic, builtinMusic, effectBuffer } from '../media/sounds';
 import { loadWork, saveWork } from '../media/storage';
 import { AudioDialog, LISTEN_SECONDS } from './AudioDialog';
 import { AboutDialog, BusyOverlay, DropOverlay, KeysDialog, Toast, type Notice } from './Dialogs';
+import { DecoratePanel } from './DecoratePanel';
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
+import { ImageHandles } from './ImageHandles';
+import { SoundPanel } from './SoundPanel';
 import { SilencePanel } from './SilencePanel';
 import { SubtitlePanel } from './SubtitlePanel';
 import { useTranscription } from './useTranscription';
@@ -51,6 +81,12 @@ import { Icon } from './icons';
 import { applyTheme, loadThemePreference, saveThemePreference, THEME_LABELS, THEME_ORDER, type ThemePreference } from './theme';
 import { Timeline, type LaneItem, type TimelineControl, type TimelineLane, type TimelineMark } from './Timeline';
 import { APP_VERSION_SHORT } from '../version';
+
+/** 書き出す画面の「幅 ÷ 高さ」（プレビューと同じ 16:9） */
+const FRAME_ASPECT = PREVIEW_WIDTH / PREVIEW_HEIGHT;
+
+// プレビューで画像を描くとき、中身はブラウザの中の保存場所から取り出す
+setImageSource(assetBlob);
 
 /** 録画のファイルが、作品に記録した録画と同じものか */
 function sameFile(source: SourceInfo, file: File): boolean {
@@ -94,7 +130,13 @@ export function App() {
   const [listening, setListening] = useState<number | null>(null);
   /** 文章で編集：動画から消すか確かめている字幕 */
   const [pendingCut, setPendingCut] = useState<string | null>(null);
+  /** 飾り：選んでいる画像と、ドラッグで動かしている途中の位置 */
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [imageDraft, setImageDraft] = useState<{ id: string; rect: PlaceRect } | null>(null);
+  /** BGM・効果音：試しに鳴らしているもの */
+  const [previewing, setPreviewing] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
   const timelineControl = useRef<TimelineControl | null>(null);
 
@@ -156,6 +198,54 @@ export function App() {
         }
       : null;
 
+  // 画像・効果音・BGM の段
+  const timelineImages = useMemo(() => imagesOnTimeline(project), [project.images, project.clips, project.assets]);
+  const timelineEffects = useMemo(() => effectsOnTimeline(project), [project.effects, project.clips]);
+  const imageLane: TimelineLane | null =
+    timelineImages.length > 0
+      ? {
+          id: 'images',
+          label: '画像',
+          items: timelineImages.map((i) => ({ key: i.key, id: i.id, from: i.from, to: i.to, text: i.name })),
+          resizable: true,
+          selectedId: selectedImage,
+        }
+      : null;
+  const effectLane: TimelineLane | null =
+    timelineEffects.length > 0
+      ? {
+          id: 'effects',
+          label: '効果音',
+          items: timelineEffects.map((e, i) => ({ key: `${e.id}#${i}`, id: e.id, from: e.time, to: e.time + effectLength(e.sound), text: '♪' })),
+          resizable: false,
+        }
+      : null;
+  const bgmName = project.bgm
+    ? project.bgm.track.kind === 'builtin'
+      ? `BGM：${musicTrack(project.bgm.track.id)?.label ?? ''}`
+      : `BGM：${project.assets.find((a) => project.bgm?.track.kind === 'asset' && a.id === project.bgm.track.assetId)?.name ?? ''}`
+    : '';
+  const bgmLane: TimelineLane | null =
+    project.bgm && total > 0 ? { id: 'bgm', label: 'BGM', items: [{ key: 'bgm', id: 'bgm', from: 0, to: total, text: bgmName }], resizable: false } : null;
+  const lanes = [subtitleLane, imageLane, effectLane, bgmLane].filter((l): l is TimelineLane => l !== null);
+
+  // しゃべっている範囲（BGM を小さくするため）。BGM を小さくする設定のときだけ計算する
+  const speech = useMemo(() => {
+    if (!project.bgm?.duck) return [];
+    const levels = new Map<string, VoiceLevel>();
+    for (const s of used) {
+      const level = analysis.voiceLevel(s.id, sourceAudio(project, s.id));
+      if (level) levels.set(s.id, level);
+    }
+    return speechOnTimeline(project, levels);
+  }, [project.bgm?.duck, project.clips, project.audio, analysisReady ? 'ready' : levelsTick]);
+
+  /** ドラッグで動かしている途中の画像も映すため、プレビューにはこの作品を渡す */
+  const shownProject = useMemo(
+    () => (imageDraft ? moveImage(project, imageDraft.id, imageDraft.rect) : project),
+    [project, imageDraft],
+  );
+
   /** 字幕の端をタイムラインで動かしたとき：完成した動画の時刻を、録画の中の時刻に直す */
   const resizeSubtitle = (item: LaneItem, from: number, to: number) => {
     const p = projectRef.current;
@@ -203,17 +293,23 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    playerRef.current?.setProject(project);
-  }, [project]);
+    playerRef.current?.setProject(shownProject);
+  }, [shownProject]);
 
   useEffect(() => {
-    playerRef.current?.refresh();
+    playerRef.current?.setSpeech(speech);
+  }, [speech]);
+
+  useEffect(() => {
+    playerRef.current?.reload();
   }, [openIds]);
 
   // 自動保存した作品を読み込む
   useEffect(() => {
     void (async () => {
       const work = await loadWork();
+      // 作品で使っていない画像・曲の中身は消す
+      void forgetAssetsExcept(new Set(work?.project.assets.map((a) => a.id) ?? []));
       if (work && work.project.sources.length > 0) {
         setHistory(createHistory(work.project));
         setHandles(work.handles);
@@ -420,15 +516,23 @@ export function App() {
     if (projectRef.current.clips.length > 0 && !confirm('いまの作品を閉じて、選んだ作品ファイルを開きますか？（いまの作品は、ファイルに保存していなければ消えます）')) {
       return;
     }
+    const missingAssets = await decodeAssets(result.project.assets, result.assetData);
+    void forgetAssetsExcept(new Set(result.project.assets.map((a) => a.id)));
     registry.clear();
     setHistory(createHistory(result.project));
     setHandles({});
     setOpenIds([]);
     setPermissionIds([]);
     setSelection(null);
+    setSelectedImage(null);
     setStep('import');
     playerRef.current?.seek(0);
-    setNotice({ kind: 'info', text: '作品ファイルを開きました。続けて「録画を選び直す」から、使っていた録画を選んでください。' });
+    setNotice({
+      kind: missingAssets.length > 0 ? 'error' : 'info',
+      text:
+        '作品ファイルを開きました。続けて「録画を選び直す」から、使っていた録画を選んでください。' +
+        (missingAssets.length > 0 ? `\n作品ファイルに入っていなかった画像・曲があります：${missingAssets.map((a) => a.name).join('、')}` : ''),
+    });
   };
 
   const openProject = async () => {
@@ -447,9 +551,16 @@ export function App() {
       return;
     }
     try {
-      const p = projectRef.current;
-      const saved = await saveTextFile(`${p.name || '作品'}${PROJECT_FILE_EXTENSION}`, serializeProject(p, new Date().toISOString()));
-      if (saved) setNotice({ kind: 'info', text: '作品ファイルに保存しました。録画のファイルは別に残しておいてください。' });
+      const p = dropUnusedAssets(projectRef.current);
+      const { data, missing: lost } = await encodeAssets(p.assets);
+      const saved = await saveTextFile(`${p.name || '作品'}${PROJECT_FILE_EXTENSION}`, serializeProject(p, new Date().toISOString(), data));
+      if (saved) {
+        setNotice(
+          lost.length > 0
+            ? { kind: 'error', text: `作品ファイルに保存しましたが、見つからない画像・曲がありました：${lost.map((a) => a.name).join('、')}` }
+            : { kind: 'info', text: '作品ファイルに保存しました（画像と曲も入っています）。録画のファイルは別に残しておいてください。' },
+        );
+      }
     } catch (e) {
       setNotice({ kind: 'error', text: `保存できませんでした（${errorText(e)}）` });
     }
@@ -461,11 +572,13 @@ export function App() {
       return;
     }
     registry.clear();
+    void forgetAssetsExcept(new Set());
     setHistory(createHistory(emptyProject()));
     setHandles({});
     setOpenIds([]);
     setPermissionIds([]);
     setSelection(null);
+    setSelectedImage(null);
     setStep('import');
   };
 
@@ -507,6 +620,8 @@ export function App() {
 
   const goStep = (id: StepId) => {
     setPendingCut(null);
+    stopPreview();
+    if (id !== 'decorate') setSelectedImage(null);
     if (id === 'export') return goExport();
     if (id !== 'import' && (project.clips.length === 0 || missing.length > 0)) return;
     setSelection(null);
@@ -533,6 +648,103 @@ export function App() {
       else n.add(id);
       return n;
     });
+
+  /** 飾り：画像を選んで置く（なぞった範囲、なければ再生位置から数秒） */
+  const addImageFile = async () => {
+    let file: File | null;
+    try {
+      file = await pickMediaFile(IMAGE_FILE_KIND);
+    } catch (e) {
+      setNotice({ kind: 'error', text: `画像を選べませんでした（${errorText(e)}）` });
+      return;
+    }
+    if (!file) return;
+    const result = await readImageFile(file);
+    if (!result.ok) {
+      setNotice({ kind: 'error', text: `「${file.name}」：${result.reason}` });
+      return;
+    }
+    await keepAsset(result.asset.id, result.blob);
+    const p = projectRef.current;
+    const now = playerRef.current?.currentTime() ?? 0;
+    const [from, to] = selection ?? [now, Math.min(totalDuration(p), now + NEW_IMAGE_SECONDS)];
+    const r = addImage(p, result.asset, from, to, 'top-right', FRAME_ASPECT);
+    if (!r.id) {
+      setNotice({ kind: 'info', text: '画像を出す時間がありません。動画の終わりより前の位置で置いてください。' });
+      return;
+    }
+    apply(r.project);
+    setSelection(null);
+    setSelectedImage(r.id);
+    playerRef.current?.seek(from);
+  };
+
+  /** 画像の出す時間を、タイムラインの端のドラッグで変える */
+  const resizeImage = (item: LaneItem, from: number, to: number) => {
+    const p = projectRef.current;
+    const pieces = imagesOnTimeline(p).filter((x) => x.id === item.id);
+    if (pieces.length === 0) return;
+    const start = Math.abs(from - item.from) > 1e-6 ? from : pieces[0].from;
+    const end = Math.abs(to - item.to) > 1e-6 ? to : pieces[pieces.length - 1].to;
+    apply(setImageTime(p, item.id, start, end));
+  };
+
+  /** BGM：自分で用意した曲を選ぶ */
+  const pickMusic = async () => {
+    let file: File | null;
+    try {
+      file = await pickMediaFile(MUSIC_FILE_KIND);
+    } catch (e) {
+      setNotice({ kind: 'error', text: `曲を選べませんでした（${errorText(e)}）` });
+      return;
+    }
+    if (!file) return;
+    setBusy('曲を調べています…');
+    const result = await readMusicFile(file);
+    setBusy(null);
+    if (!result.ok) {
+      setNotice({ kind: 'error', text: `「${file.name}」：${result.reason}` });
+      return;
+    }
+    await keepAsset(result.asset.id, result.blob);
+    const p = addAsset(projectRef.current, result.asset);
+    const bgm: BgmSetting = { track: { kind: 'asset', assetId: result.asset.id }, volume: p.bgm?.volume ?? DEFAULT_BGM_VOLUME, duck: p.bgm?.duck ?? true };
+    apply({ ...p, bgm });
+    setNotice({ kind: 'info', text: `「${file.name}」を BGM にしました。` });
+  };
+
+  const previewMusic = (track: BgmSetting['track']) => {
+    const key = track.kind === 'builtin' ? `music:${track.id}` : `music:${track.assetId}`;
+    setPreviewing(key);
+    const buffer = track.kind === 'builtin' ? builtinMusic(track.id) : assetMusic(track.assetId);
+    void playerRef.current?.preview(buffer, 15, 0.7, () => setPreviewing((k) => (k === key ? null : k)));
+  };
+
+  const previewSound = (sound: SoundId) => {
+    const key = `sound:${sound}`;
+    setPreviewing(key);
+    void playerRef.current?.preview(effectBuffer(sound), 3, Math.max(0.3, projectRef.current.effectsVolume), () =>
+      setPreviewing((k) => (k === key ? null : k)),
+    );
+  };
+
+  function stopPreview() {
+    if (previewing) playerRef.current?.stopListening();
+    setPreviewing(null);
+  }
+
+  /** 書き出しに渡す画像・曲の中身 */
+  const exportAssets = async () => {
+    const p = projectRef.current;
+    const blobs: Record<string, Blob> = {};
+    const lost: string[] = [];
+    for (const id of usedAssetIds(p)) {
+      const blob = await assetBlob(id);
+      if (blob) blobs[id] = blob;
+      else lost.push(p.assets.find((a) => a.id === id)?.name ?? id);
+    }
+    return { blobs, missing: lost };
+  };
 
   /** 音の設定を変える（元に戻せる操作として記録する） */
   const changeAudio = (sourceId: string, audio: SourceAudio) => apply(setSourceAudio(projectRef.current, sourceId, audio));
@@ -623,6 +835,11 @@ export function App() {
   };
 
   const message = guideMessage(project, { step, hasSelection: selection !== null, missingSources: missing.length });
+  /** プレビューの上で動かせる画像（飾りの手順で選んでいて、いま映っているもの） */
+  const handleImage =
+    step === 'decorate' && selectedImage && !playback.playing && imagesAt(shownProject, playback.time).some((i) => i.id === selectedImage)
+      ? shownProject.images.find((i) => i.id === selectedImage) ?? null
+      : null;
   const stepIndex = STEPS.findIndex((s) => s.id === step);
 
   return (
@@ -645,11 +862,13 @@ export function App() {
               <button
                 class={`step ${i === stepIndex ? 'active' : ''}`}
                 aria-current={i === stepIndex ? 'step' : undefined}
+                aria-label={s.label}
+                title={s.label}
                 disabled={exporting || (s.id !== 'import' && (project.clips.length === 0 || missing.length > 0))}
                 onClick={() => goStep(s.id)}
               >
                 <span class="num">{i + 1}</span>
-                {s.label}
+                <span class="step-label">{s.label}</span>
               </button>
             </Fragment>
           ))}
@@ -662,17 +881,17 @@ export function App() {
             <Icon name="redo" />
           </button>
           <span class="tool-sep" />
-          <button class="btn small ghost" title="作品をファイルに保存（Ctrl+S）" onClick={saveProject}>
+          <button class="btn small ghost" title="作品をファイルに保存（Ctrl+S）" aria-label="保存" onClick={saveProject}>
             <Icon name="save" />
-            保存
+            <span class="tool-label">保存</span>
           </button>
-          <button class="btn small ghost" title="保存した作品ファイルを開く" onClick={openProject} disabled={exporting}>
+          <button class="btn small ghost" title="保存した作品ファイルを開く" aria-label="開く" onClick={openProject} disabled={exporting}>
             <Icon name="open" />
-            開く
+            <span class="tool-label">開く</span>
           </button>
-          <button class="btn small ghost" title="新しい作品を作る" onClick={newProject} disabled={exporting}>
+          <button class="btn small ghost" title="新しい作品を作る" aria-label="新しく" onClick={newProject} disabled={exporting}>
             <Icon name="new" />
-            新しく
+            <span class="tool-label">新しく</span>
           </button>
           <span class="tool-sep" />
           <button class="btn icon ghost" title={`画面の明るさ：${THEME_LABELS[theme]}（押すと切り替え）`} aria-label={`画面の明るさ：${THEME_LABELS[theme]}`} onClick={cycleTheme}>
@@ -689,8 +908,21 @@ export function App() {
 
       <main class="workspace">
         <section class="stage" aria-label="プレビュー">
-          <div class="preview-box">
+          <div class="preview-box" ref={boxRef}>
             <canvas ref={canvasRef} onClick={() => playerRef.current?.toggle()} title="押すと再生・一時停止（スペース）" />
+            {handleImage && boxRef.current && (
+              <ImageHandles
+                image={handleImage}
+                asset={project.assets.find((a) => a.id === handleImage.assetId)}
+                box={boxRef.current}
+                frameAspect={FRAME_ASPECT}
+                onDraft={(rect) => setImageDraft({ id: handleImage.id, rect })}
+                onCommit={(rect) => {
+                  setImageDraft(null);
+                  apply(moveImage(projectRef.current, handleImage.id, rect));
+                }}
+              />
+            )}
             {total === 0 && (
               <div class="preview-empty">
                 <div>
@@ -781,12 +1013,73 @@ export function App() {
             onStyle={(style) => apply({ ...projectRef.current, subtitleStyle: style })}
             onExportSrt={exportSrt}
             onImportSrt={importSrtFile}
+            onNext={() => goStep('decorate')}
+          />
+        ) : step === 'decorate' ? (
+          <DecoratePanel
+            project={project}
+            items={timelineImages}
+            selectedId={selectedImage}
+            selection={selection}
+            join={nearestJoin(project, playback.time)}
+            onAddImage={addImageFile}
+            onSelect={(id) => {
+              setSelectedImage(id);
+              const piece = timelineImages.find((x) => x.id === id);
+              if (piece && !(playback.time >= piece.from && playback.time < piece.to)) playerRef.current?.seek(piece.from);
+            }}
+            onPlace={(id, place) => apply(setImagePlace(projectRef.current, id, place, FRAME_ASPECT))}
+            onUseSelection={(id) => {
+              if (!selection) return;
+              apply(setImageTime(projectRef.current, id, selection[0], selection[1]));
+              setSelection(null);
+            }}
+            onRemove={(id) => {
+              apply(removeImage(projectRef.current, id));
+              if (selectedImage === id) setSelectedImage(null);
+            }}
+            onSeek={(t) => playerRef.current?.seek(t)}
+            onToggleJoin={(clipId) => apply(toggleJoinFade(projectRef.current, clipId))}
+            onFadeSourceChanges={() => {
+              const r = fadeSourceChanges(projectRef.current);
+              if (r.count > 0) {
+                apply(r.project);
+                setNotice({ kind: 'info', text: `${r.count}か所のつなぎ目にフェードを入れました。` });
+              } else {
+                setNotice({ kind: 'info', text: '録画が切り替わるつなぎ目には、すでにフェードが入っています。' });
+              }
+            }}
+            onEndFade={(on) => apply({ ...projectRef.current, endFade: on })}
+            onNext={() => goStep('sound')}
+          />
+        ) : step === 'sound' ? (
+          <SoundPanel
+            project={project}
+            effects={timelineEffects}
+            previewing={previewing}
+            speechReady={analysisReady}
+            onBgm={(bgm) => apply({ ...projectRef.current, bgm })}
+            onPickMusic={pickMusic}
+            onPreviewMusic={previewMusic}
+            onPreviewSound={previewSound}
+            onStopPreview={stopPreview}
+            onAddEffect={(sound) => {
+              const r = addEffect(projectRef.current, playerRef.current?.currentTime() ?? 0, sound);
+              if (r.id) apply(r.project);
+            }}
+            onRemoveEffect={(id) => apply(removeEffect(projectRef.current, id))}
+            onEffectsVolume={(v) => apply({ ...projectRef.current, effectsVolume: v })}
+            onSeek={(t) => playerRef.current?.seek(t)}
             onNext={goExport}
           />
         ) : step === 'export' ? (
           <ExportPanel
             project={project}
             files={() => registry.allFiles()}
+            assets={exportAssets}
+            speech={speech}
+            speechReady={analysisReady}
+            speechProgress={analysisProgress}
             onBack={() => setStep('import')}
             onRunningChange={setExporting}
             onExportSrt={exportSrt}
@@ -827,9 +1120,20 @@ export function App() {
                 : undefined
           }
           onToggleMark={step === 'silence' ? toggleKept : undefined}
-          lanes={subtitleLane ? [subtitleLane] : []}
-          onLaneItemClick={(_lane, _id, t) => playerRef.current?.seek(t)}
-          onLaneItemResize={(_lane, item, from, to) => resizeSubtitle(item, from, to)}
+          lanes={lanes}
+          onLaneItemClick={(lane, id, t) => {
+            if (lane === 'images') {
+              setSelectedImage(id);
+              if (step !== 'decorate') goStep('decorate');
+            }
+            playerRef.current?.seek(t);
+          }}
+          onLaneItemResize={(lane, item, from, to) => (lane === 'images' ? resizeImage(item, from, to) : resizeSubtitle(item, from, to))}
+          joinMarks={activeJoinFades(project).flatMap((id) => {
+            const i = project.clips.findIndex((c) => c.id === id);
+            return i < 0 ? [] : [project.clips.slice(0, i).reduce((t, c) => t + (c.end - c.start), 0)];
+          })}
+          selectionAction={step === 'decorate' ? { label: 'ここに画像を置く', icon: 'image', onClick: addImageFile } : undefined}
           missing={missingSet}
           disabled={exporting}
           control={timelineControl}

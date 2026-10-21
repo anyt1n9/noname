@@ -36,12 +36,19 @@ type Phase =
 interface Props {
   project: Project;
   files: () => Record<string, File>;
+  /** 作品で使う画像・曲の中身。見つからないものがあれば、その名前 */
+  assets: () => Promise<{ blobs: Record<string, Blob>; missing: string[] }>;
+  /** しゃべっている範囲（BGM を小さくするため） */
+  speech: [number, number][];
+  /** 声を調べ終わったか（BGM を小さくするのに要る） */
+  speechReady: boolean;
+  speechProgress: number;
   onBack(): void;
   onRunningChange(running: boolean): void;
   onExportSrt(): void;
 }
 
-export function ExportPanel({ project, files, onBack, onRunningChange, onExportSrt }: Props) {
+export function ExportPanel({ project, files, assets, speech, speechReady, speechProgress, onBack, onRunningChange, onExportSrt }: Props) {
   const [quality, setQuality] = useState<QualityId>(DEFAULT_QUALITY);
   const [codecs, setCodecs] = useState<CodecChoice | null | undefined>(undefined);
   const [phase, setPhase] = useState<Phase>({ kind: 'choose' });
@@ -82,6 +89,11 @@ export function ExportPanel({ project, files, onBack, onRunningChange, onExportS
       return;
     }
     if (!target) return;
+    const media = await assets();
+    if (media.missing.length > 0) {
+      setPhase({ kind: 'error', message: `画像・曲のファイルが見つかりません：${media.missing.join('、')}` });
+      return;
+    }
     const startedAt = Date.now();
     const savedName = target.name;
     setPhase({ kind: 'running', progress: 0, startedAt, canceling: false });
@@ -103,7 +115,7 @@ export function ExportPanel({ project, files, onBack, onRunningChange, onExportS
     });
     job.current = j;
     const exportProject = burnSubtitles ? project : { ...project, subtitles: [] };
-    j.start(exportProject, files(), plan, codecs, target);
+    j.start(exportProject, files(), plan, codecs, target, media.blobs, speech);
   };
 
   const cancel = () => {
@@ -174,7 +186,8 @@ export function ExportPanel({ project, files, onBack, onRunningChange, onExportS
     );
   }
 
-  const canStart = codecs !== undefined && codecs !== null && plan.duration > 0;
+  const waitSpeech = project.bgm?.duck === true && !speechReady;
+  const canStart = codecs !== undefined && codecs !== null && plan.duration > 0 && !waitSpeech;
   return (
     <div class="guide">
       <h2>動画を書き出しましょう</h2>
@@ -219,6 +232,11 @@ export function ExportPanel({ project, files, onBack, onRunningChange, onExportS
       )}
       {codecs === null && (
         <p class="note warn">このブラウザでは動画を書き出せません。新しい Chrome か Edge で開いてください。</p>
+      )}
+      {waitSpeech && (
+        <p class="note">
+          しゃべっている間に BGM を小さくするため、録画の音を調べています… {Math.floor(speechProgress * 100)}%（終わると書き出せます）
+        </p>
       )}
       <dl class="facts">
         <dt>動画の長さ</dt>

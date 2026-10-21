@@ -34,16 +34,12 @@ export function speechThreshold(rms: Float32Array): number {
   return Math.min(floor + Math.max(6, range * 0.35), speech - 6);
 }
 
-/**
- * 録画の中の「間」を、切る範囲（しゃべりの前後に余白を残したもの）として返す。
- * startTime〜endTime は録画の始まりと終わり。録画の端の「間」には余白を残さない。
- */
-export function findSilences(level: VoiceLevel, strength: CutStrength, startTime: number, endTime: number): [number, number][] {
+/** 目盛り（binSeconds）ごとに、しゃべっているか。短すぎるしゃべり（物音など）は除く */
+export function speakingBins(level: VoiceLevel): boolean[] {
   const { rms, binSeconds } = level;
   if (rms.length === 0) return [];
   const threshold = speechThreshold(rms);
   const speaking = Array.from(rms, (v) => toDb(v) >= threshold);
-  // 短すぎるしゃべり（物音など）は「間」として扱う
   const minSpeechBins = Math.max(1, Math.round(MIN_SPEECH_SECONDS / binSeconds));
   for (let i = 0; i < speaking.length; ) {
     if (!speaking[i]) {
@@ -55,6 +51,34 @@ export function findSilences(level: VoiceLevel, strength: CutStrength, startTime
     if (j - i < minSpeechBins) for (let k = i; k < j; k++) speaking[k] = false;
     i = j;
   }
+  return speaking;
+}
+
+/** しゃべっている範囲（録画の中の時刻・始まりの順）。BGM を小さくするために使う */
+export function speechRanges(level: VoiceLevel): [number, number][] {
+  const speaking = speakingBins(level);
+  const out: [number, number][] = [];
+  for (let i = 0; i < speaking.length; ) {
+    if (!speaking[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j < speaking.length && speaking[j]) j++;
+    out.push([i * level.binSeconds, j * level.binSeconds]);
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * 録画の中の「間」を、切る範囲（しゃべりの前後に余白を残したもの）として返す。
+ * startTime〜endTime は録画の始まりと終わり。録画の端の「間」には余白を残さない。
+ */
+export function findSilences(level: VoiceLevel, strength: CutStrength, startTime: number, endTime: number): [number, number][] {
+  const { binSeconds } = level;
+  const speaking = speakingBins(level);
+  if (speaking.length === 0) return [];
   const result: [number, number][] = [];
   for (let i = 0; i < speaking.length; ) {
     if (speaking[i]) {

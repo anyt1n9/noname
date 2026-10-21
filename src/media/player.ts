@@ -1,15 +1,21 @@
 // プレビューの再生。タイムラインに並んだかたまりを、順につないで映像と音を出す
 import type { AudioBufferSink } from 'mediabunny';
+import { bgmEnvelope, bgmLevel, bgmPoints } from '../core/bgm';
+import { effectsOnTimeline } from '../core/effects';
+import { fadeLevel, fadeWindows } from '../core/fades';
 import { activeTracks, emptyProject, sourceAudio, type Clip, type Project } from '../core/project';
 import { clamp } from '../core/time';
 import { clipLength, clipStarts, locate, totalDuration } from '../core/timeline';
 import { drawOverlays, overlaysReady, prepareOverlays } from './compose';
 import { PREVIEW_HEIGHT, PREVIEW_WIDTH, type SourceRegistry } from './registry';
+import { assetMusic, builtinMusic, effectBuffer } from './sounds';
 
 /** 再生を始めるまでの余裕（秒）。最初の映像と音を用意する時間 */
 const START_LEAD = 0.15;
 /** 音をどれだけ先まで用意しておくか（秒） */
 const AUDIO_AHEAD = 1;
+/** BGM の大きさの変化をどれだけ先まで予約しておくか（秒） */
+const BGM_AHEAD = 6;
 
 export interface PlayerState {
   time: number;
@@ -17,6 +23,12 @@ export interface PlayerState {
 }
 
 const nextFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+function sameRanges(a: [number, number][], b: [number, number][]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((r, i) => r[0] === b[i][0] && r[1] === b[i][1]);
+}
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export class Player {
@@ -25,6 +37,12 @@ export class Player {
   private total = 0;
   private ctx: AudioContext | null = null;
   private gain: GainNode | null = null;
+  /** 録画の音（つなぎ目のフェードをかける）・BGM・効果音の大きさ */
+  private program: GainNode | null = null;
+  private bgmGain: GainNode | null = null;
+  private fxGain: GainNode | null = null;
+  /** しゃべっている範囲（BGM を小さくするため） */
+  private speech: [number, number][] = [];
   private playingNow = false;
   private pausedAt = 0;
   private ctxStart = 0;
@@ -34,6 +52,8 @@ export class Player {
   private drawToken = 0;
   private nodes = new Set<AudioBufferSourceNode>();
   private draw2d: CanvasRenderingContext2D;
+  /** 止まっているときに最後に描いた映像（重ねるものだけを描き直すとき、読み直さないため） */
+  private still: { key: string; canvas: OffscreenCanvas } | null = null;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -77,9 +97,22 @@ export class Player {
     }
   }
 
+  /** しゃべっている範囲（完成した動画の時刻）。次に再生するときから BGM の大きさに使う */
+  setSpeech(speech: [number, number][]): void {
+    if (sameRanges(speech, this.speech)) return;
+    this.speech = speech;
+    if (this.playingNow && this.project.bgm?.duck) this.start(this.currentTime());
+  }
+
   /** 録画が開けるようになったときなどに、いまの位置を描き直す */
   refresh(): void {
     if (!this.playingNow) void this.drawAt(this.pausedAt);
+  }
+
+  /** 録画を開き直したときなど、覚えている映像を捨てて描き直す */
+  reload(): void {
+    this.still = null;
+    this.refresh();
   }
 
   seek(time: number): void {
@@ -93,14 +126,28 @@ export class Player {
     }
   }
 
-  async play(): Promise<void> {
-    if (this.playingNow || this.total <= 0) return;
+  private async ensureContext(): Promise<AudioContext> {
     if (!this.ctx) {
-      this.ctx = new AudioContext();
-      this.gain = this.ctx.createGain();
-      this.gain.connect(this.ctx.destination);
+      const ctx = new AudioContext();
+      this.ctx = ctx;
+      this.gain = ctx.createGain();
+      this.gain.connect(ctx.destination);
+      const sub = () => {
+        const g = ctx.createGain();
+        g.connect(this.gain!);
+        return g;
+      };
+      this.program = sub();
+      this.bgmGain = sub();
+      this.fxGain = sub();
     }
     if (this.ctx.state === 'suspended') await this.ctx.resume();
+    return this.ctx;
+  }
+
+  async play(): Promise<void> {
+    if (this.playingNow || this.total <= 0) return;
+    await this.ensureContext();
     const from = this.pausedAt >= this.total - 0.01 ? 0 : this.pausedAt;
     this.start(from);
   }
@@ -132,10 +179,81 @@ export class Player {
     this.playingNow = true;
     this.timelineStart = from;
     this.ctxStart = ctx.currentTime + START_LEAD;
+    this.scheduleFades(from);
+    this.scheduleEffects(from);
     void this.runVideo(gen, from);
     void this.runAudio(gen, from);
+    void this.runBgm(gen, from);
     void this.tick(gen);
     this.emit();
+  }
+
+  /** 完成した動画の時刻を、AudioContext の時刻に直す */
+  private ctxTime(t: number): number {
+    return this.ctxStart + (t - this.timelineStart);
+  }
+
+  /** つなぎ目のフェード：録画の音の大きさを予約する */
+  private scheduleFades(from: number): void {
+    const g = this.program!.gain;
+    g.cancelScheduledValues(0);
+    g.setValueAtTime(fadeLevel(this.project, from), this.ctx!.currentTime);
+    for (const w of fadeWindows(this.project)) {
+      if (w.to <= from) continue;
+      const a = Math.max(w.from, from);
+      g.setValueAtTime(fadeLevel(this.project, a), this.ctxTime(a));
+      g.linearRampToValueAtTime(w.level1, this.ctxTime(w.to));
+    }
+  }
+
+  /** 効果音を鳴らす予約をする */
+  private scheduleEffects(from: number): void {
+    const ctx = this.ctx!;
+    this.fxGain!.gain.value = this.project.effectsVolume;
+    for (const e of effectsOnTimeline(this.project)) {
+      const buffer = effectBuffer(e.sound);
+      if (e.time + buffer.duration <= from) continue;
+      const offset = Math.max(0, from - e.time);
+      const node = ctx.createBufferSource();
+      node.buffer = buffer;
+      node.connect(this.fxGain!);
+      node.start(this.ctxTime(e.time + offset), offset);
+      this.nodes.add(node);
+      node.onended = () => this.nodes.delete(node);
+    }
+  }
+
+  /** BGM をくり返し鳴らし、大きさ（フェード・しゃべっている間は小さく）を少しずつ予約する */
+  private async runBgm(gen: number, from: number): Promise<void> {
+    const bgm = this.project.bgm;
+    const g = this.bgmGain!.gain;
+    g.cancelScheduledValues(0);
+    g.setValueAtTime(0, this.ctx!.currentTime);
+    if (!bgm) return;
+    const buffer = await (bgm.track.kind === 'builtin' ? builtinMusic(bgm.track.id) : assetMusic(bgm.track.assetId));
+    if (gen !== this.generation || !buffer) return;
+    const ctx = this.ctx!;
+    const env = bgmEnvelope(this.project, this.speech);
+    // 曲の用意に時間がかかったときは、いまの位置から鳴らす
+    const when = Math.max(ctx.currentTime + 0.05, this.ctxTime(from));
+    const startAt = this.timelineStart + (when - this.ctxStart);
+    const node = ctx.createBufferSource();
+    node.buffer = buffer;
+    node.loop = true;
+    node.connect(this.bgmGain!);
+    node.start(when, startAt % buffer.duration);
+    this.nodes.add(node);
+    node.onended = () => this.nodes.delete(node);
+    g.setValueAtTime(bgm.volume * bgmLevel(env, startAt), when);
+    let scheduledTo = startAt;
+    while (gen === this.generation && scheduledTo < this.total) {
+      const until = Math.min(this.total, Math.max(this.currentTime(), startAt) + BGM_AHEAD);
+      if (until > scheduledTo + 0.5 || until >= this.total) {
+        for (const [t, v] of bgmPoints(env, scheduledTo, until).slice(1)) g.linearRampToValueAtTime(bgm.volume * v, this.ctxTime(t));
+        scheduledTo = until;
+      }
+      await sleep(500);
+    }
   }
 
   private async tick(gen: number): Promise<void> {
@@ -221,7 +339,7 @@ export class Player {
     const ctx = this.ctx!;
     const trackGain = ctx.createGain();
     trackGain.gain.value = gainValue;
-    trackGain.connect(this.gain!);
+    trackGain.connect(this.program!);
     try {
       for await (const { buffer, timestamp, duration } of sink.buffers(sourceFrom, clip.end)) {
         if (gen !== this.generation) return;
@@ -260,19 +378,13 @@ export class Player {
    */
   async listen(sourceId: string, trackIndex: number, from: number, seconds: number): Promise<void> {
     this.pause();
-    if (!this.ctx) {
-      this.ctx = new AudioContext();
-      this.gain = this.ctx.createGain();
-      this.gain.connect(this.ctx.destination);
-    }
-    if (this.ctx.state === 'suspended') await this.ctx.resume();
+    const ctx = await this.ensureContext();
     this.generation++;
     const gen = this.generation;
     this.stopAudio();
     const source = await this.registry.open(sourceId).catch(() => null);
     const sink = source?.audioSinks[trackIndex];
     if (!sink || gen !== this.generation) return;
-    const ctx = this.ctx;
     const start = ctx.currentTime + 0.1;
     for await (const { buffer, timestamp, duration } of sink.buffers(from, from + seconds)) {
       if (gen !== this.generation) return;
@@ -288,6 +400,39 @@ export class Player {
     }
   }
 
+  /**
+   * BGM や効果音を試しに鳴らす（seconds 秒まで。曲が短ければくり返す）。再生中なら止める。
+   * 終わったら onEnd を呼ぶ。
+   */
+  async preview(sound: AudioBuffer | Promise<AudioBuffer | null>, seconds: number, volume: number, onEnd?: () => void): Promise<void> {
+    this.pause();
+    const ctx = await this.ensureContext();
+    this.generation++;
+    const gen = this.generation;
+    this.stopAudio();
+    const buffer = await sound;
+    if (!buffer || gen !== this.generation) return;
+    const length = Math.min(seconds, buffer.duration * 4);
+    const gain = ctx.createGain();
+    gain.connect(this.gain!);
+    const start = ctx.currentTime + 0.05;
+    gain.gain.setValueAtTime(volume, start);
+    if (length > 2) {
+      gain.gain.setValueAtTime(volume, start + length - 1);
+      gain.gain.linearRampToValueAtTime(0, start + length);
+    }
+    const node = ctx.createBufferSource();
+    node.buffer = buffer;
+    node.loop = buffer.duration < length;
+    node.connect(gain);
+    node.start(start, 0, length);
+    this.nodes.add(node);
+    node.onended = () => {
+      this.nodes.delete(node);
+      onEnd?.();
+    };
+  }
+
   /** 聴き比べを止める */
   stopListening(): void {
     if (this.playingNow) return;
@@ -296,6 +441,10 @@ export class Player {
   }
 
   private stopAudio(): void {
+    if (this.ctx) {
+      for (const g of [this.program, this.bgmGain]) g?.gain.cancelScheduledValues(0);
+      this.bgmGain?.gain.setValueAtTime(0, this.ctx.currentTime);
+    }
     for (const node of this.nodes) {
       try {
         node.stop();
@@ -313,6 +462,12 @@ export class Player {
       this.clear();
       return;
     }
+    const key = `${loc.clip.sourceId}:${loc.sourceTime}`;
+    if (this.still?.key === key) {
+      this.draw2d.drawImage(this.still.canvas, 0, 0);
+      this.overlay(time);
+      return;
+    }
     const source = await this.registry.open(loc.clip.sourceId).catch(() => null);
     if (token !== this.drawToken) return;
     if (!source) {
@@ -324,10 +479,17 @@ export class Player {
       if (token !== this.drawToken || this.playingNow) return;
       if (frame) this.draw2d.drawImage(frame.canvas, 0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
       else this.clear();
+      this.keepStill(key);
       this.overlay(time);
     } catch (e) {
       console.warn('プレビューの映像を読めませんでした', e);
     }
+  }
+
+  private keepStill(key: string): void {
+    const canvas = this.still?.canvas ?? new OffscreenCanvas(PREVIEW_WIDTH, PREVIEW_HEIGHT);
+    canvas.getContext('2d')!.drawImage(this.draw2d.canvas, 0, 0);
+    this.still = { key, canvas };
   }
 
   /** 字幕などを重ねる。フォントがまだなら読み込み、止まっていれば描き直す */

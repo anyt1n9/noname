@@ -12,6 +12,10 @@ export interface ExportRequest {
   audioCodec: string;
   /** 書き出し先のファイル */
   target: FileSystemFileHandle;
+  /** 作品で使う画像・曲の中身（Asset の id → 中身） */
+  assets: Record<string, Blob>;
+  /** しゃべっている範囲（BGM を小さくするため。完成した動画の時刻） */
+  speech: [number, number][];
 }
 
 export interface ExportCancel {

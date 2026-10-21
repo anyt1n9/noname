@@ -152,6 +152,39 @@ export async function openTextFile(kind: TextFileKind = PROJECT_FILE_KIND): Prom
   return file ?? null;
 }
 
+export interface MediaFileKind {
+  description: string;
+  accept: Record<string, string[]>;
+  id: string;
+}
+
+export const IMAGE_FILE_KIND: MediaFileKind = {
+  description: '画像（PNG・JPEG・WebP）',
+  accept: { 'image/png': ['.png'], 'image/jpeg': ['.jpg', '.jpeg'], 'image/webp': ['.webp'] },
+  id: 'images',
+};
+
+export const MUSIC_FILE_KIND: MediaFileKind = {
+  description: '曲（MP3・M4A・WAV・OGG・FLAC）',
+  accept: { 'audio/*': ['.mp3', '.m4a', '.aac', '.wav', '.ogg', '.oga', '.opus', '.flac'] },
+  id: 'music',
+};
+
+/** 画像や曲のファイルを1つ選ぶ。選ばなかったら null */
+export async function pickMediaFile(kind: MediaFileKind): Promise<File | null> {
+  if (window.showOpenFilePicker) {
+    try {
+      const [handle] = await window.showOpenFilePicker({ types: [{ description: kind.description, accept: kind.accept }], id: kind.id });
+      return handle.getFile();
+    } catch (e) {
+      if (isAbort(e)) return null;
+      throw e;
+    }
+  }
+  const [file] = await pickWithInput(Object.values(kind.accept).flat().join(','), false);
+  return file ?? null;
+}
+
 function pickWithInput(accept: string, multiple: boolean): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input');

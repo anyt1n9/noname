@@ -1,5 +1,7 @@
 // 作品（プロジェクト）のデータ。元の録画は書き換えず、
 // 「どの録画の、どこからどこまでを、どの順に使うか」だけを持つ。
+import type { ImagePlace } from '../data/images';
+import type { SoundId } from '../data/sfx';
 import { DEFAULT_SUBTITLE_STYLE, type SubtitleStyle } from '../data/subtitle-style';
 
 /** 読み込んだ録画の情報 */
@@ -60,6 +62,64 @@ export interface Subtitle {
   text: string;
 }
 
+/** 録画の中の時刻で表した範囲 */
+export interface SourceRange {
+  sourceId: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * 作品に入れた画像や曲。中身（ファイルそのもの）は作品のデータとは別に、
+ * ブラウザの中の保存場所と作品ファイルに入れる。id は中身から作った手がかり（同じファイルなら同じ id）。
+ */
+export interface Asset {
+  id: string;
+  kind: 'image' | 'music';
+  name: string;
+  /** ファイルの形式（image/png など） */
+  type: string;
+  size: number;
+  /** 画像の幅と高さ（曲は 0） */
+  width: number;
+  height: number;
+  /** 曲の長さ（秒。画像は 0） */
+  duration: number;
+}
+
+/** 映像に重ねる画像 */
+export interface ImageOverlay {
+  id: string;
+  assetId: string;
+  /** 出す時間（録画の中の時刻）。かたまりをまたぐときは複数になる */
+  ranges: SourceRange[];
+  /** 置き方（右上・中央など）。ドラッグで動かしたら 'free' */
+  place: ImagePlace;
+  /** 画像の真ん中の位置（画面の幅・高さに対する割合） */
+  x: number;
+  y: number;
+  /** 画像の幅（画面の幅に対する割合） */
+  w: number;
+}
+
+/** 効果音。録画の中の時刻に置くので、カットしても映像とずれない */
+export interface SoundEffect {
+  id: string;
+  sound: SoundId;
+  sourceId: string;
+  time: number;
+}
+
+/** BGM の設定 */
+export interface BgmSetting {
+  /** 入っている曲の ID、または自分で用意した曲（Asset の id） */
+  track: { kind: 'builtin'; id: string } | { kind: 'asset'; assetId: string };
+  /** 大きさ（1 でそのまま） */
+  volume: number;
+  /** しゃべっている間は小さくするか */
+  duck: boolean;
+}
+
 export interface Project {
   /** 作品名。書き出すファイル名にも使う */
   name: string;
@@ -73,6 +133,18 @@ export interface Project {
   subtitleStyle: SubtitleStyle;
   /** 録画の ID → 文字起こしを済ませた範囲（録画の中の時刻）。続きから文字起こしするために使う */
   transcribed: Record<string, [number, number][]>;
+  /** 画像・曲（中身は別に保存する） */
+  assets: Asset[];
+  /** 映像に重ねる画像（後ろのものほど手前） */
+  images: ImageOverlay[];
+  effects: SoundEffect[];
+  /** 効果音の大きさ（1 でそのまま） */
+  effectsVolume: number;
+  bgm: BgmSetting | null;
+  /** 前のつなぎ目でフェード（暗くなって切り替わる）するかたまりの ID。最初のかたまりなら、動画の始まりのフェード */
+  joinFades: string[];
+  /** 動画の終わりをフェードで暗くするか */
+  endFade: boolean;
   /** 次に使う番号（ID を作るため） */
   nextId: number;
 }
@@ -86,6 +158,13 @@ export function emptyProject(): Project {
     subtitles: [],
     subtitleStyle: DEFAULT_SUBTITLE_STYLE,
     transcribed: {},
+    assets: [],
+    images: [],
+    effects: [],
+    effectsVolume: 1,
+    bgm: null,
+    joinFades: [],
+    endFade: false,
     nextId: 1,
   };
 }
@@ -156,6 +235,29 @@ export function updateSource(project: Project, sourceId: string, info: Partial<O
     ...project,
     sources: project.sources.map((s) => (s.id === sourceId ? { ...s, ...info } : s)),
   };
+}
+
+/** 画像・曲を作品に入れる（同じものがあれば入れない） */
+export function addAsset(project: Project, asset: Asset): Project {
+  if (project.assets.some((a) => a.id === asset.id)) return project;
+  return { ...project, assets: [...project.assets, asset] };
+}
+
+/** 使われていない画像・曲を作品から外す */
+export function dropUnusedAssets(project: Project): Project {
+  const used = usedAssetIds(project);
+  if (project.assets.every((a) => used.has(a.id))) return project;
+  return { ...project, assets: project.assets.filter((a) => used.has(a.id)) };
+}
+
+export function usedAssetIds(project: Project): Set<string> {
+  const used = new Set(project.images.map((i) => i.assetId));
+  if (project.bgm?.track.kind === 'asset') used.add(project.bgm.track.assetId);
+  return used;
+}
+
+export function findAsset(project: Project, id: string): Asset | undefined {
+  return project.assets.find((a) => a.id === id);
 }
 
 /** タイムラインで使われている録画だけ（使われていない録画は探し直さなくてよい） */

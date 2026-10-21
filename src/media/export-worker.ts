@@ -11,7 +11,12 @@ import {
   type StreamTargetChunk,
   type VideoCodec,
 } from 'mediabunny';
-import { writeAudio } from './export-audio';
+import { bgmEnvelope } from '../core/bgm';
+import { renderMusic } from '../core/music';
+import { musicTrack } from '../data/music';
+import { OUTPUT_SAMPLE_RATE } from '../data/quality';
+import { setImageSource } from './compose';
+import { LoopBuffer, LoopTrack, writeAudio, type BgmForExport } from './export-audio';
 import type { ExportCommand, ExportEvent, ExportRequest } from './export-protocol';
 import { writeVideo } from './export-video';
 import { errorText, openInput } from './probe';
@@ -43,7 +48,10 @@ async function run(req: ExportRequest): Promise<void> {
   const audios = new Map<string, (InputAudioTrack | null)[]>();
   let writable: FileSystemWritableFileStream | null = null;
   let output: Output | null = null;
+  let bgm: BgmForExport | null = null;
+  setImageSource(async (id) => req.assets[id] ?? null);
   try {
+    bgm = await openBgm(req, inputs);
     for (const clip of req.project.clips) {
       if (videos.has(clip.sourceId)) continue;
       const file = req.files[clip.sourceId];
@@ -112,6 +120,7 @@ async function run(req: ExportRequest): Promise<void> {
       writeAudio({
         project: req.project,
         tracks: audios,
+        bgm,
         source: audioSource,
         checkCanceled,
         onProgress: (t) => {
@@ -134,8 +143,30 @@ async function run(req: ExportRequest): Promise<void> {
     if (e instanceof Canceled || canceled) post({ type: 'canceled' });
     else post({ type: 'error', message: errorText(e) });
   } finally {
+    await bgm?.reader.close().catch(() => undefined);
     for (const input of inputs.values()) input.dispose();
   }
+}
+
+/** BGM を用意する（入っている曲は作り、自分で用意した曲はファイルから読む） */
+async function openBgm(req: ExportRequest, inputs: Map<string, ReturnType<typeof openInput>>): Promise<BgmForExport | null> {
+  const setting = req.project.bgm;
+  if (!setting) return null;
+  const envelope = bgmEnvelope(req.project, req.speech);
+  if (setting.track.kind === 'builtin') {
+    const track = musicTrack(setting.track.id);
+    if (!track) return null;
+    const music = renderMusic(track, OUTPUT_SAMPLE_RATE);
+    return { reader: new LoopBuffer(music.channels), volume: setting.volume, envelope };
+  }
+  const blob = req.assets[setting.track.assetId];
+  if (!blob) throw new Error('BGM の曲のファイルが見つかりません');
+  const input = openInput(blob);
+  inputs.set('bgm', input);
+  const track = await input.getPrimaryAudioTrack();
+  if (!track || !(await track.canDecode())) throw new Error('BGM の曲を読めませんでした');
+  const duration = await track.computeDuration();
+  return { reader: new LoopTrack(track, duration), volume: setting.volume, envelope };
 }
 
 function checkCanceled(): void {

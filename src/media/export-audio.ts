@@ -1,10 +1,15 @@
 // 書き出しの音。かたまりごとに、鳴らす音（声・ゲームの音など）を読んで混ぜ、48kHz・ステレオで書く
 import { AudioSample, AudioSampleSink, type AudioSampleSource, type InputAudioTrack } from 'mediabunny';
 import { AudioConverter } from '../core/audio-convert';
+import { bgmGains, type BgmEnvelope } from '../core/bgm';
+import { effectsOnTimeline } from '../core/effects';
+import { fadeGains } from '../core/fades';
 import { audioSlice, samplesFor } from '../core/frames';
 import { activeTracks, sourceAudio, type Clip, type Project } from '../core/project';
+import { renderSound } from '../core/sfx';
 import { clipLength } from '../core/timeline';
 import { OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE } from '../data/quality';
+import type { SoundId } from '../data/sfx';
 
 /** 1回に混ぜる長さ（サンプル数） */
 const BLOCK = OUTPUT_SAMPLE_RATE / 2;
@@ -98,17 +103,129 @@ export class TrackReader {
   }
 }
 
+/** BGM を順に取り出す係（最後まで来たら最初に戻る） */
+export interface BgmReader {
+  read(count: number): Promise<Float32Array[]>;
+  close(): Promise<void>;
+}
+
+/** すでに作ってある曲（入っている曲）をくり返す */
+export class LoopBuffer implements BgmReader {
+  private pos = 0;
+  constructor(private channels: Float32Array[]) {}
+  async read(count: number): Promise<Float32Array[]> {
+    const length = this.channels[0].length;
+    const out = this.channels.map(() => new Float32Array(count));
+    for (let i = 0; i < count; i++) {
+      for (let c = 0; c < out.length; c++) out[c][i] = this.channels[c][this.pos];
+      this.pos = (this.pos + 1) % length;
+    }
+    return out;
+  }
+  async close(): Promise<void> {}
+}
+
+/** つなぎ目でぷつっと鳴らないよう、くり返しの前後を少しだけ小さくする（サンプル数） */
+const LOOP_EDGE = Math.round(OUTPUT_SAMPLE_RATE * 0.01);
+
+/** 曲のファイルを少しずつ読みながらくり返す（長い曲でもメモリに溜めない） */
+export class LoopTrack implements BgmReader {
+  private reader: TrackReader;
+  private produced = 0;
+  private length: number;
+  private clip: Clip;
+  constructor(
+    private track: InputAudioTrack,
+    duration: number,
+  ) {
+    this.clip = { id: 'bgm', sourceId: 'bgm', start: 0, end: duration };
+    this.length = samplesFor(duration, OUTPUT_SAMPLE_RATE);
+    this.reader = new TrackReader(track, this.clip);
+  }
+  async read(count: number): Promise<Float32Array[]> {
+    const out = Array.from({ length: OUTPUT_CHANNELS }, () => new Float32Array(count));
+    let filled = 0;
+    while (filled < count) {
+      const take = Math.min(count - filled, this.length - this.produced);
+      const part = await this.reader.read(take);
+      for (let c = 0; c < OUTPUT_CHANNELS; c++) {
+        const o = out[c];
+        for (let i = 0; i < take; i++) {
+          const k = this.produced + i;
+          const edge = Math.min(1, k / LOOP_EDGE, (this.length - 1 - k) / LOOP_EDGE);
+          o[filled + i] = part[c][i] * edge;
+        }
+      }
+      filled += take;
+      this.produced += take;
+      if (this.produced >= this.length) {
+        await this.reader.close();
+        this.reader = new TrackReader(this.track, this.clip);
+        this.produced = 0;
+      }
+    }
+    return out;
+  }
+  async close(): Promise<void> {
+    await this.reader.close();
+  }
+}
+
+export interface BgmForExport {
+  reader: BgmReader;
+  volume: number;
+  envelope: BgmEnvelope;
+}
+
 export interface AudioContextForExport {
   project: Project;
   /** 録画の ID → 録画に入っている順の音（読めない音は null） */
   tracks: Map<string, (InputAudioTrack | null)[]>;
+  bgm: BgmForExport | null;
   source: AudioSampleSource;
   checkCanceled(): void;
   onProgress(seconds: number): void;
 }
 
+/** 効果音を、完成した動画の時刻に合わせて足していく係 */
+class EffectMixer {
+  private list: { at: number; data: Float32Array }[];
+  private next = 0;
+  private playing: { at: number; data: Float32Array }[] = [];
+  private gain: number;
+  constructor(project: Project) {
+    const sounds = new Map<SoundId, Float32Array>();
+    this.gain = project.effectsVolume;
+    this.list = effectsOnTimeline(project).map((e) => {
+      let data = sounds.get(e.sound);
+      if (!data) {
+        data = renderSound(e.sound, OUTPUT_SAMPLE_RATE);
+        sounds.set(e.sound, data);
+      }
+      return { at: Math.round(e.time * OUTPUT_SAMPLE_RATE), data };
+    });
+  }
+  /** from サンプル目から count サンプルの範囲に鳴る効果音を mix に足す */
+  add(mix: Float32Array[], from: number, count: number): void {
+    const to = from + count;
+    while (this.next < this.list.length && this.list[this.next].at < to) this.playing.push(this.list[this.next++]);
+    this.playing = this.playing.filter((e) => e.at + e.data.length > from);
+    for (const e of this.playing) {
+      const a = Math.max(from, e.at);
+      const b = Math.min(to, e.at + e.data.length);
+      for (let k = a; k < b; k++) {
+        const v = e.data[k - e.at] * this.gain;
+        for (const m of mix) m[k - from] += v;
+      }
+    }
+  }
+}
+
 export async function writeAudio(ctx: AudioContextForExport): Promise<void> {
   let outStart = 0;
+  /** 完成した動画の何サンプル目まで書いたか（BGM・効果音・フェードの位置に使う） */
+  let position = 0;
+  const effects = new EffectMixer(ctx.project);
   for (const clip of ctx.project.clips) {
     const length = clipLength(clip);
     const needed = samplesFor(length, OUTPUT_SAMPLE_RATE);
@@ -132,6 +249,22 @@ export async function writeAudio(ctx: AudioContextForExport): Promise<void> {
             for (let i = 0; i < count; i++) m[i] += p[i] * gain;
           }
         }
+        const t0 = position / OUTPUT_SAMPLE_RATE;
+        // つなぎ目のフェードは録画の音だけにかける（BGM は続ける）
+        const fade = fadeGains(ctx.project, t0, count, OUTPUT_SAMPLE_RATE);
+        if (fade) for (const m of mix) for (let i = 0; i < count; i++) m[i] *= fade[i];
+        effects.add(mix, position, count);
+        if (ctx.bgm) {
+          const part = await ctx.bgm.reader.read(count);
+          const gains = bgmGains(ctx.bgm.envelope, t0, count, OUTPUT_SAMPLE_RATE);
+          const volume = ctx.bgm.volume;
+          for (let c = 0; c < OUTPUT_CHANNELS; c++) {
+            const m = mix[c];
+            const p = part[c];
+            for (let i = 0; i < count; i++) m[i] += p[i] * gains[i] * volume;
+          }
+        }
+        position += count;
         // 音が大きすぎて割れないよう、はみ出した分は切る（v0.7 でなめらかに抑える）
         for (const m of mix) for (let i = 0; i < m.length; i++) m[i] = m[i] > 1 ? 1 : m[i] < -1 ? -1 : m[i];
         await addPlanar(ctx.source, mix, count, outStart + written / OUTPUT_SAMPLE_RATE);

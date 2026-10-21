@@ -34,7 +34,7 @@ export function SilencePanel(p: Props) {
         </p>
         <div class="actions sticky">
           <button class="btn primary big" onClick={p.onNext}>
-            次へ：書き出し
+            次へ：字幕
             <Icon name="next" />
           </button>
           <button class="btn" onClick={p.onPlayResult}>

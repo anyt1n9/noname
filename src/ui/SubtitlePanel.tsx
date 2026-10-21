@@ -335,7 +335,7 @@ export function SubtitlePanel(p: Props) {
       )}
       <div class="actions sticky">
         <button class="btn primary big" onClick={p.onNext}>
-          {has ? '次へ：書き出し' : '字幕なしで次へ'}
+          {has ? '次へ：飾り' : '字幕なしで次へ'}
           <Icon name="next" />
         </button>
       </div>

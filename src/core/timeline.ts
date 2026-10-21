@@ -1,5 +1,7 @@
 // タイムラインの計算（切る・並べ替える・時刻の変換）
-import type { Clip, Project } from './project';
+import type { Clip, Project, SourceRange } from './project';
+
+export type { SourceRange } from './project';
 
 /** これより短いかけらは残さない（なぞった範囲の端がわずかにずれたときのため） */
 export const MIN_CLIP_SECONDS = 0.01;
@@ -129,13 +131,6 @@ export function snapToFrame(t: number, frameRate: number): number {
   return Math.round(t * frameRate) / frameRate;
 }
 
-/** 録画の中の時刻で表した範囲 */
-export interface SourceRange {
-  sourceId: string;
-  start: number;
-  end: number;
-}
-
 /**
  * 録画の中の範囲をまとめて取り除く（無音カットや、字幕の行を消すときに使う）。
  * タイムライン上の位置ではなく録画の時刻で指定するので、並べ替えや前のカットに左右されない。
@@ -192,4 +187,67 @@ export function sourceRangeOnTimeline(project: Project, range: SourceRange): [nu
     t += len;
   }
   return result;
+}
+
+/** 完成した動画の from〜to 秒が、どの録画のどこにあたるか（かたまりごとに分かれる） */
+export function timelineToSource(project: Project, from: number, to: number): SourceRange[] {
+  const result: SourceRange[] = [];
+  let t = 0;
+  for (const clip of project.clips) {
+    const len = clipLength(clip);
+    const a = Math.max(from, t);
+    const b = Math.min(to, t + len);
+    if (b - a >= MIN_CLIP_SECONDS) result.push({ sourceId: clip.sourceId, start: clip.start + (a - t), end: clip.start + (b - t) });
+    t += len;
+  }
+  return result;
+}
+
+/** 録画の中の範囲（いくつも）が、完成した動画のどこに見えているか（時刻の順にまとめる） */
+export function sourceRangesOnTimeline(project: Project, ranges: SourceRange[]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const r of ranges) out.push(...sourceRangeOnTimeline(project, r));
+  out.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [a, b] of out) {
+    const last = merged[merged.length - 1];
+    if (last && a <= last[1] + 1e-6) last[1] = Math.max(last[1], b);
+    else merged.push([a, b]);
+  }
+  return merged;
+}
+
+/**
+ * 録画ごとの範囲の一覧（録画の中の時刻・始まりの順）を、完成した動画の時刻に直す。
+ * 長い録画で範囲がたくさんあっても速く計算できるよう、かたまりごとに必要な部分だけを探す。
+ */
+export function rangesOnTimeline(project: Project, bySource: Map<string, [number, number][]>): [number, number][] {
+  const out: [number, number][] = [];
+  let t = 0;
+  for (const clip of project.clips) {
+    const list = bySource.get(clip.sourceId);
+    if (list && list.length > 0) {
+      // 終わりが clip.start より後ろの最初の範囲
+      let lo = 0;
+      let hi = list.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (list[mid][1] <= clip.start) lo = mid + 1;
+        else hi = mid;
+      }
+      for (let i = lo; i < list.length && list[i][0] < clip.end; i++) {
+        const a = Math.max(list[i][0], clip.start);
+        const b = Math.min(list[i][1], clip.end);
+        if (b > a) out.push([t + (a - clip.start), t + (b - clip.start)]);
+      }
+    }
+    t += clipLength(clip);
+  }
+  return out;
+}
+
+/** 完成した動画の、かたまりのつなぎ目の時刻（最初のかたまりの始まりは 0） */
+export function joinTimes(project: Project): { clipId: string; time: number }[] {
+  const starts = clipStarts(project);
+  return project.clips.map((c, i) => ({ clipId: c.id, time: starts[i] }));
 }

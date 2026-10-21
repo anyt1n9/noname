@@ -56,7 +56,15 @@ export class ExportJob {
     };
   }
 
-  start(project: Project, files: Record<string, File>, plan: ExportPlan, codecs: CodecChoice, target: FileSystemFileHandle): void {
+  start(
+    project: Project,
+    files: Record<string, File>,
+    plan: ExportPlan,
+    codecs: CodecChoice,
+    target: FileSystemFileHandle,
+    assets: Record<string, Blob>,
+    speech: [number, number][],
+  ): void {
     const req: ExportRequest = {
       type: 'start',
       project,
@@ -65,6 +73,8 @@ export class ExportJob {
       videoCodec: codecs.video.codec,
       audioCodec: codecs.audio.codec,
       target,
+      assets,
+      speech,
     };
     this.worker.postMessage(req);
   }
