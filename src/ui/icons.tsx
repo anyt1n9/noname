@@ -27,7 +27,8 @@ export type IconName =
   | 'music'
   | 'bell'
   | 'fade'
-  | 'stop';
+  | 'stop'
+  | 'ai';
 
 const PATHS: Record<IconName, string> = {
   play: 'M8 5v14l11-7z',
@@ -55,6 +56,7 @@ const PATHS: Record<IconName, string> = {
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0',
   fade: 'M3 18L12 6l9 12M3 18h18',
   stop: 'M7 7h10v10H7z',
+  ai: 'M4 5h16v11H9l-4 4v-4H4zM8 10h.01M12 10h.01M16 10h.01',
 };
 
 const FILLED: Partial<Record<IconName, boolean>> = { play: true, pause: true, stop: true };

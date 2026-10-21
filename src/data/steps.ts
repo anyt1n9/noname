@@ -1,6 +1,6 @@
 // 画面上の手順の案内。版が上がるたびに手順が増える
 
-export type StepId = 'import' | 'silence' | 'subtitles' | 'decorate' | 'sound' | 'export';
+export type StepId = 'import' | 'silence' | 'subtitles' | 'decorate' | 'sound' | 'export' | 'publish';
 
 export interface Step {
   id: StepId;
@@ -14,6 +14,7 @@ export const STEPS: readonly Step[] = [
   { id: 'decorate', label: '飾り' },
   { id: 'sound', label: '音の仕上げ' },
   { id: 'export', label: '書き出し' },
+  { id: 'publish', label: '公開の準備' },
 ];
 
 /** 次の手順 */

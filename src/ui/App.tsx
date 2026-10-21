@@ -32,6 +32,7 @@ import {
 } from '../core/project';
 import { parseProject, PROJECT_FILE_EXTENSION, serializeProject } from '../core/project-file';
 import { applyCandidates, candidateOnTimeline, candidatesLength, findCandidates, type VoiceLevel } from '../core/silence';
+import { breakLines } from '../core/captions';
 import { importSrt, parseSrt, toSrt } from '../core/srt';
 import {
   addSubtitleAt,
@@ -81,7 +82,10 @@ import { loadWork, saveWork } from '../media/storage';
 import { AudioDialog, LISTEN_SECONDS } from './AudioDialog';
 import { AboutDialog, BusyOverlay, DropOverlay, KeysDialog, Toast, type Notice } from './Dialogs';
 import { BoxHandles, type Box } from './BoxHandles';
+import { AiDialog } from './AiDialog';
 import { DecoratePanel, type DecorateTab, type Selected } from './DecoratePanel';
+import { PublishPanel, type PublishTab } from './PublishPanel';
+import { TypoDialog } from './TypoDialog';
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
 import { SoundPanel, type SoundTab } from './SoundPanel';
@@ -186,6 +190,10 @@ export function App() {
   /** 音の仕上げのタブと、直前に声の大きさをそろえた結果 */
   const [soundTab, setSoundTab] = useState<SoundTab>('voice');
   const [normalized, setNormalized] = useState<{ name: string; db: number }[] | null>(null);
+  /** AI のお手伝い（v0.8） */
+  const [showAi, setShowAi] = useState(false);
+  const [showTypos, setShowTypos] = useState(false);
+  const [publishTab, setPublishTab] = useState<PublishTab>('title');
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
@@ -316,7 +324,22 @@ export function App() {
     : '';
   const bgmLane: TimelineLane | null =
     project.bgm && total > 0 ? { id: 'bgm', label: 'BGM', items: [{ key: 'bgm', id: 'bgm', from: 0, to: total, text: bgmName }], resizable: false } : null;
-  const lanes = [subtitleLane, imageLane, shapeLane, zoomLane, effectLane, bgmLane].filter((l): l is TimelineLane => l !== null);
+  const chapterLane: TimelineLane | null =
+    project.publish.chapters.length > 0 && total > 0
+      ? {
+          id: 'chapters',
+          label: 'チャプター',
+          items: project.publish.chapters.map((c, i, list) => ({
+            key: `chapter#${i}`,
+            id: `chapter#${i}`,
+            from: Math.min(c.time, total),
+            to: Math.min(total, list[i + 1]?.time ?? total),
+            text: c.title,
+          })),
+          resizable: false,
+        }
+      : null;
+  const lanes = [subtitleLane, imageLane, shapeLane, zoomLane, effectLane, bgmLane, chapterLane].filter((l): l is TimelineLane => l !== null);
 
   // しゃべっている範囲（BGM を小さくするため）。BGM を小さくする設定のときだけ計算する
   const speech = useMemo(() => {
@@ -958,7 +981,7 @@ export function App() {
   // キーボード操作
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyHandler.current = (e: KeyboardEvent) => {
-    if (showKeys || showAbout || audioFor) return;
+    if (showKeys || showAbout || audioFor || showAi || showTypos) return;
     const action = actionForKey(e, isTyping(e.target));
     if (!action) return;
     const player = playerRef.current;
@@ -1092,6 +1115,10 @@ export function App() {
           <span class="tool-sep" />
           <button class="btn icon ghost" title={`画面の明るさ：${THEME_LABELS[theme]}（押すと切り替え）`} aria-label={`画面の明るさ：${THEME_LABELS[theme]}`} onClick={cycleTheme}>
             <Icon name="theme" />
+          </button>
+          <button class="btn small ghost" title="AI に調べものや台本の下書きを手伝ってもらう" aria-label="AIに聞く" onClick={() => setShowAi(true)}>
+            <Icon name="ai" />
+            <span class="tool-label">AIに聞く</span>
           </button>
           <button class="btn icon ghost" title="キーの一覧（?）" aria-label="キーの一覧" onClick={() => setShowKeys(true)}>
             <Icon name="keys" />
@@ -1229,6 +1256,7 @@ export function App() {
             onStyle={(style) => apply({ ...projectRef.current, subtitleStyle: style })}
             onExportSrt={exportSrt}
             onImportSrt={importSrtFile}
+            onFixTypos={() => setShowTypos(true)}
             onNext={() => goStep('decorate')}
           />
         ) : step === 'decorate' ? (
@@ -1330,6 +1358,17 @@ export function App() {
             onBack={() => setStep('import')}
             onRunningChange={setExporting}
             onExportSrt={exportSrt}
+            onPublish={() => goStep('publish')}
+          />
+        ) : step === 'publish' ? (
+          <PublishPanel
+            project={project}
+            tab={publishTab}
+            time={playback.time}
+            onTab={setPublishTab}
+            onChange={(publish) => apply({ ...projectRef.current, publish })}
+            onSeek={(t) => playerRef.current?.seek(t)}
+            notify={(text) => setNotice({ kind: 'info', text })}
           />
         ) : (
           <GuidePanel
@@ -1415,6 +1454,19 @@ export function App() {
       {notice && <Toast notice={notice} onClose={() => setNotice(null)} />}
       {showKeys && <KeysDialog onClose={() => setShowKeys(false)} />}
       {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      {showAi && <AiDialog topic={project.publish.title || project.name} onClose={() => setShowAi(false)} />}
+      {showTypos && (
+        <TypoDialog
+          project={project}
+          onClose={() => setShowTypos(false)}
+          onApply={(changes) => {
+            let p = projectRef.current;
+            for (const c of changes) p = setSubtitleText(p, c.id, breakLines(c.text));
+            apply(p);
+            setNotice({ kind: 'info', text: `${changes.length}行の字幕を直しました。気に入らなければ「元に戻す」で戻せます。` });
+          }}
+        />
+      )}
       {audioFor && project.sources.some((s) => s.id === audioFor) && (
         <AudioDialog
           source={project.sources.find((s) => s.id === audioFor)!}

@@ -18,6 +18,7 @@ import {
   type Clip,
   type ImageOverlay,
   type Project,
+  type PublishInfo,
   type ShapeOverlay,
   type SoundEffect,
   type SourceAudio,
@@ -30,7 +31,7 @@ import {
 
 export const PROJECT_FILE_FORMAT = 'teroppa-project';
 /** 版の番号。新しい項目を足したら上げる（古い版のファイルも読めるようにしておく） */
-export const PROJECT_FILE_VERSION = 6;
+export const PROJECT_FILE_VERSION = 7;
 export const PROJECT_FILE_EXTENSION = '.teroppa';
 
 /** 画像・曲の中身（Asset の id → base64 の文字） */
@@ -180,7 +181,20 @@ export function readProject(value: unknown): Project | null {
     bgm: readBgm(value.bgm, assets),
     joinFades: [...new Set(joinFades)],
     endFade: value.endFade === true,
+    publish: readPublish(value.publish),
     nextId: value.nextId,
+  };
+}
+
+function readPublish(value: unknown): PublishInfo {
+  if (!isObject(value)) return { title: '', description: '', chapters: [] };
+  const chapters = Array.isArray(value.chapters)
+    ? value.chapters.flatMap((c) => (isObject(c) && isTime(c.time) && typeof c.title === 'string' ? [{ time: c.time, title: c.title }] : []))
+    : [];
+  return {
+    title: typeof value.title === 'string' ? value.title : '',
+    description: typeof value.description === 'string' ? value.description : '',
+    chapters,
   };
 }
 

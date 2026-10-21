@@ -3,6 +3,7 @@
 import type { ImagePlace } from '../data/images';
 import type { ArrowDirection, ShapeKind, ShapeThickness } from '../data/shapes';
 import type { DenoiseStrength } from '../data/voice';
+import type { Chapter } from './chapters';
 import type { NoiseProfile } from './denoise';
 import type { SoundId } from '../data/sfx';
 import { DEFAULT_SUBTITLE_STYLE, type SubtitleStyle } from '../data/subtitle-style';
@@ -156,6 +157,13 @@ export interface BgmSetting {
   duck: boolean;
 }
 
+/** 公開の準備（v0.8〜）：タイトル・概要欄・チャプター */
+export interface PublishInfo {
+  title: string;
+  description: string;
+  chapters: Chapter[];
+}
+
 export interface Project {
   /** 作品名。書き出すファイル名にも使う */
   name: string;
@@ -185,6 +193,7 @@ export interface Project {
   joinFades: string[];
   /** 動画の終わりをフェードで暗くするか */
   endFade: boolean;
+  publish: PublishInfo;
   /** 次に使う番号（ID を作るため） */
   nextId: number;
 }
@@ -207,6 +216,7 @@ export function emptyProject(): Project {
     bgm: null,
     joinFades: [],
     endFade: false,
+    publish: { title: '', description: '', chapters: [] },
     nextId: 1,
   };
 }

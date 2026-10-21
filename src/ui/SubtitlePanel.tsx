@@ -48,6 +48,8 @@ interface Props {
   onStyle(style: SubtitleStyle): void;
   onExportSrt(): void;
   onImportSrt(): void;
+  /** AI で誤字を直す（v0.8） */
+  onFixTypos(): void;
   onNext(): void;
 }
 
@@ -329,6 +331,9 @@ export function SubtitlePanel(p: Props) {
             </button>
             <button class="btn small" onClick={p.onExportSrt} title="YouTube の字幕機能で使えるファイル">
               字幕ファイル（.srt）を書き出す
+            </button>
+            <button class="btn small" onClick={p.onFixTypos} title="自動の文字起こしの聞き間違いを、AI に直してもらう">
+              AI で誤字を直す
             </button>
           </div>
         </>

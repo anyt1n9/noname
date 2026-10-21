@@ -68,12 +68,18 @@ export function AboutDialog({ onClose }: { onClose(): void }) {
           <li>
             自動字幕を初めて使うとき（了承したときだけ）：AI の部品を配布元の Hugging Face（{MODEL_HOST}）からダウンロードします。大きさを調べるための問い合わせもします。接続元の情報（IP アドレス）が配布元に伝わります。
           </li>
+          <li>
+            「AIに聞く」：あなたが選んだ AI のサイト（ChatGPT・Claude・Gemini・Microsoft Copilot）を新しいタブで開きます。テロッパからは何も送りません。質問文を貼り付けて送ると、そのサイトの会社に送られます。
+          </li>
+          <li>
+            パソコンの中の AI（Chrome に入っている AI）を初めて使うとき（了承したときだけ）：Chrome が AI の部品を Google からダウンロードします。字幕などの文章は送りません。
+          </li>
         </ul>
         <div class="section-title">使うときの注意</div>
         <ul class="steps-list about-list">
           <li>他人の音楽・映像・画像を勝手に使うと、著作権の侵害になります。</li>
           <li>ゲーム実況では、ゲーム会社ごとの「動画を出してよいか」のルール（ガイドライン）を確かめてください。</li>
-          <li>自動字幕の AI は聞き間違えることがあります。確かめてから使ってください。</li>
+          <li>自動字幕や AI のお手伝いの答えは、間違えることがあります。確かめてから使ってください。</li>
           <li>自分で用意した画像や曲は、自分で作ったものか、動画に使ってよい条件（ライセンス）を確かめたものだけを使ってください。</li>
         </ul>
         <div class="section-title">入っている BGM・効果音</div>

@@ -204,7 +204,7 @@ button {
 }
 
 /* 横の幅が狭いときは、上の帯のボタンを絵だけにし、手順は選んでいるものだけ名前を出す */
-@media (max-width: 1440px) {
+@media (max-width: 1660px) {
   .tools .tool-label {
     display: none;
   }
@@ -214,7 +214,7 @@ button {
 }
 
 /* さらに狭いときは、手順を2段目に出す（名前は全部見せる） */
-@media (max-width: 1320px) {
+@media (max-width: 1480px) {
   .topbar {
     flex-wrap: wrap;
     row-gap: 6px;
@@ -1332,4 +1332,147 @@ kbd {
 .item-main.static {
   cursor: default;
   justify-content: space-between;
+}
+
+/* AI のお手伝い・公開の準備（v0.8） */
+.dialog.wide {
+  width: min(720px, calc(100vw - 40px));
+  max-width: none;
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.field.inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field input,
+.field textarea,
+.chapter-list input {
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.field textarea {
+  resize: vertical;
+}
+
+.field.inline input {
+  width: 80px;
+}
+
+.ask-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.ask-ai .field textarea,
+.ask-ai .field input {
+  background: var(--panel);
+}
+
+.typo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.typo-list li {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.typo-list .check {
+  align-items: flex-start;
+}
+
+.typo-before {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+}
+
+.pre {
+  white-space: pre-wrap;
+  font-size: 13px;
+}
+
+.chapter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.chapter-list li {
+  display: grid;
+  grid-template-columns: 28px 84px 1fr auto;
+  gap: 4px;
+  align-items: center;
+}
+
+.chapter-list .item-time {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--accent-ink);
+}
+
+.chapter-list .chapter-time {
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+
+.ai-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }

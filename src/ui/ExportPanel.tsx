@@ -46,9 +46,11 @@ interface Props {
   onBack(): void;
   onRunningChange(running: boolean): void;
   onExportSrt(): void;
+  /** 公開の準備へ（v0.8） */
+  onPublish(): void;
 }
 
-export function ExportPanel({ project, files, assets, speech, speechReady, speechProgress, onBack, onRunningChange, onExportSrt }: Props) {
+export function ExportPanel({ project, files, assets, speech, speechReady, speechProgress, onBack, onRunningChange, onExportSrt, onPublish }: Props) {
   const [quality, setQuality] = useState<QualityId>(DEFAULT_QUALITY);
   const [codecs, setCodecs] = useState<CodecChoice | null | undefined>(undefined);
   const [phase, setPhase] = useState<Phase>({ kind: 'choose' });
@@ -174,7 +176,11 @@ export function ExportPanel({ project, files, assets, speech, speechReady, speec
           </p>
         )}
         <div class="actions sticky">
-          <button class="btn primary" onClick={() => setPhase({ kind: 'choose' })}>
+          <button class="btn primary" onClick={onPublish}>
+            次へ：公開の準備
+            <Icon name="next" />
+          </button>
+          <button class="btn" onClick={() => setPhase({ kind: 'choose' })}>
             もう一度書き出す
           </button>
           <button class="btn" onClick={onBack}>

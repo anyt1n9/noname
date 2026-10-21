@@ -55,6 +55,14 @@ function makeFixtures() {
 const stubPickers = () => {
   window.__pickQueue = [];
   window.__saveNames = [];
+  // 「AIに聞く」で開くサイトとコピーした文字を記録する（本当には開かない）
+  window.__opened = [];
+  window.__copied = [];
+  window.open = (url) => {
+    window.__opened.push(String(url));
+    return null;
+  };
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => void window.__copied.push(t) }, configurable: true });
   window.showOpenFilePicker = async () => {
     const names = window.__pickQueue.shift();
     if (!names) throw new DOMException('閉じた', 'AbortError');
@@ -585,13 +593,84 @@ async function main() {
   const whole = stats(v7File, 0, 12);
   check('音が割れていない（一番大きいところが上限より下）', whole.peak <= -0.5, `${whole.peak}dB`);
 
+  // AI のお手伝い（v0.8）。作業環境には Chrome の AI がないので、決まった答えを返す「まねした AI」で、テロッパ側の動きを確かめる
+  await page.evaluate(() => {
+    window.LanguageModel = {
+      availability: async () => 'available',
+      create: async () => ({
+        prompt: async (text) => {
+          if (text.includes('番号: 直した文')) return '2: ボスの弱点は背中です！';
+          if (text.includes('見出しを1つ')) return 'ボスの話';
+          if (text.includes('タイトルの案')) return 'タイトル案：\n1. ボスの弱点まとめ\n2. 背中を狙え\n3. 3分でわかるボス戦\n概要欄：\nボスの弱点を紹介します。';
+          return '要点です';
+        },
+        destroy() {},
+      }),
+    };
+  });
+  await page.getByRole('button', { name: /次へ：公開の準備/ }).click();
+  await page.waitForSelector('text=公開の準備をしましょう');
+  // A「AIに聞く」：質問文をコピーして、選んだ AI のサイトを開く（貼り付け・送信は使う人が行う）
+  await page.getByRole('button', { name: 'AIに聞く（AI のサイト）' }).click();
+  await page.getByRole('radiogroup', { name: '使う AI のサイト' }).getByRole('radio', { name: 'Claude' }).click();
+  check('AI のサイトに送る前に、送り先の会社を知らせる', (await page.locator('.ask-ai .note').innerText()).includes('Anthropic に送られます'));
+  await page.getByRole('button', { name: '質問文をコピーして Claude を開く' }).click();
+  const opened = await page.evaluate(() => window.__opened.slice());
+  const copied = await page.evaluate(() => window.__copied.slice());
+  check('質問文をコピーして AI のサイトを開く', opened[0] === 'https://claude.ai/new' && copied[0]?.includes('ボスの弱点は背中です'), opened.join(','));
+  await page.getByRole('textbox', { name: 'AI の答えを貼る欄' }).fill('タイトル案：\n1. ボスの弱点を3分で解説\n概要欄：\nボスの倒し方を紹介します。');
+  await page.getByRole('button', { name: '答えを読み込む' }).click();
+  await page.locator('.chip', { hasText: 'ボスの弱点を3分で解説' }).click();
+  check('AI の答えを貼ると、タイトルの案として使える', (await page.getByRole('textbox', { name: 'タイトル', exact: true }).inputValue()) === 'ボスの弱点を3分で解説');
+  // C パソコンの中の AI（まねした AI）：はじめに案内を出す
+  await page.getByRole('button', { name: 'このパソコンの AI で案を作る' }).click();
+  check('パソコンの中の AI を使う前に、Google の禁止事項ポリシーを案内する', (await page.locator('.note.rights').innerText()).includes('禁止事項ポリシー'));
+  await page.getByRole('button', { name: '了承して使う' }).click();
+  await page.waitForSelector('.chip >> text=背中を狙え');
+  check('パソコンの中の AI で、タイトルの案を作れる（まねした AI）', true);
+  // チャプター：12秒の動画は短すぎるので、そう知らせる
+  await page.getByRole('tab', { name: 'チャプター' }).click();
+  await page.getByRole('button', { name: 'このパソコンの AI で案を作る' }).click();
+  await page.waitForSelector('.chapter-list li');
+  check('チャプターの案を作り、短すぎる動画ではそう知らせる', (await page.locator('.publish-panel .note.warn').innerText()).includes('短すぎ'));
+  await page.screenshot({ path: path.join(OUT, '25-publish.png') });
+  // 字幕の誤字直し（AIに聞く・答えを貼る）
+  await goStep(page, '字幕');
+  await page.getByRole('button', { name: 'AI で誤字を直す' }).click();
+  await page.getByRole('radiogroup', { name: 'AI の使い方' }).getByRole('radio', { name: /AIに聞く/ }).click();
+  await page.getByRole('textbox', { name: 'AI の答えを貼る欄' }).fill('2: ボスの弱点は背中です！\n9: ない行');
+  await page.getByRole('button', { name: '答えを読み込む' }).click();
+  await page.waitForSelector('.typo-list li');
+  check('AI が直した案を、前と後で見せる', (await page.locator('.typo-list li').count()) === 1);
+  await page.screenshot({ path: path.join(OUT, '26-typos.png') });
+  await page.getByRole('button', { name: /選んだものを直す/ }).click();
+  check('選んだ字幕だけを直せる', (await page.locator('.sub-row').nth(1).innerText()).includes('背中です！'));
+  await page.keyboard.press('Control+z');
+  check('AI で直したのも元に戻せる', !(await page.locator('.sub-row').nth(1).innerText()).includes('！'));
+  // 調べもの・台本（上の「AIに聞く」）
+  await page.getByRole('button', { name: 'AIに聞く', exact: true }).click();
+  await page.getByRole('textbox', { name: '動画のテーマ' }).fill('ボスの倒し方');
+  await page.getByRole('tab', { name: '台本の下書き' }).click();
+  const scripted = await page
+    .waitForFunction(() => document.querySelector('textarea[aria-label="AI への質問文"]')?.value.includes('台本の下書き'), null, { timeout: 5000 })
+    .then(() => true, () => false);
+  check('台本の下書きの質問文を作る', scripted);
+  await page.getByRole('button', { name: '閉じる' }).last().click();
+
   // 明るい画面・狭い画面
+  await goStep(page, '書き出し');
   await page.getByRole('button', { name: /編集に戻る/ }).click();
   await page.emulateMedia({ colorScheme: 'light' });
   await page.screenshot({ path: path.join(OUT, '07-light.png') });
   await page.setViewportSize({ width: 1280, height: 650 });
   await goStep(page, '書き出し');
   await page.screenshot({ path: path.join(OUT, '08-export-small.png') });
+  for (const width of [1920, 1366, 1280, 1000]) {
+    await page.setViewportSize({ width, height: 700 });
+    await page.waitForTimeout(150);
+    const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    check(`横幅${width}でも画面が横にはみ出さない`, over <= 0, `${over}px`);
+  }
 
   check('画面にエラーが出ていない', errors.length === 0, errors.join(' / '));
   await browser.close();
