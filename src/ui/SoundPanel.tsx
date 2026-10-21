@@ -229,7 +229,7 @@ export function SoundPanel(p: Props) {
           {bgm.duck && !p.speechReady && <p class="hint-text">録画の音を調べ終わると、しゃべっている間に小さくなります。</p>}
         </div>
       )}
-      <p class="hint-text">入っている曲は、テロッパの中でプログラムで作った曲です。テロッパで作った動画に使えます。</p>
+      <p class="hint-text">入っている曲は、テロッパの中でプログラムで作った曲です（CC0）。クレジットなしで、収益化した動画にも使えます。</p>
       </>
       )}
 

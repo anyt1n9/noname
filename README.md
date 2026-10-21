@@ -3,7 +3,7 @@
 ブラウザで使える、YouTube の解説動画・ゲーム実況向けの動画編集ソフトです。しゃべっていない「間」を自動で切る機能と、声を自動で字幕にする機能を中心に、初めての人でも迷わず1本完成できることを目指しています。
 
 - 仕様書：[docs/spec.md](docs/spec.md)
-- 現在の版：v1.0.0-rc.1（v1.0 の候補。録画を読み込んでから、YouTube に上げる準備までひととおりできる段階。ライセンス・正式な名前・公開場所が決まったら v1.0.0 にします。[docs/release.md](docs/release.md)）
+- 現在の版：v1.0.0-rc.1（v1.0 の候補。録画を読み込んでから、YouTube に上げる準備までひととおりできる段階。ライセンスは決めました（下の「ライセンス」）。正式な名前・公開場所が決まったら v1.0.0 にします。[docs/release.md](docs/release.md)）
 - 対応ブラウザ：パソコンの Chrome・Edge の最新版
 
 ## 使い方
@@ -68,6 +68,7 @@ npm run check       # 上の3つをまとめて実行
 
 ## ライセンス
 
-ソースコードのライセンスはまだ決めていません。決まるまでは、コードを見ることはできますが、使ったり改造したりすることはできません。
+- **ソースコード**：[MIT License](LICENSE)。だれでも自由に使ったり、改造したり、配ったりできます（著作権の表示とライセンスの文を残すこと）。
+- **テロッパに入っている BGM・効果音・見本の録画（絵と音）・テンプレートの見た目**：[CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/deed.ja)（パブリック・ドメイン）。テロッパで作った動画やサムネイルに、クレジットなしで自由に使えます。収益化した動画にも使えます。
 
 このソフトが使っている部品（Mediabunny：MPL-2.0、Preact：MIT、Transformers.js：Apache-2.0、ONNX Runtime Web：MIT など）とフォント（Noto Sans JP：OFL）のライセンス表記は [public/THIRD_PARTY_LICENSES.txt](public/THIRD_PARTY_LICENSES.txt) にあります。

@@ -82,10 +82,12 @@ export function AboutDialog({ onClose, onPractice, onPrivacy }: { onClose(): voi
           <li>自動字幕や AI のお手伝いの答えは、間違えることがあります。確かめてから使ってください。</li>
           <li>自分で用意した画像や曲は、自分で作ったものか、動画に使ってよい条件（ライセンス）を確かめたものだけを使ってください。</li>
         </ul>
-        <div class="section-title">入っている BGM・効果音</div>
+        <div class="section-title">入っている BGM・効果音・見本の録画</div>
         <p class="about-text">
-          テロッパに入っている BGM（5曲）と効果音（6種類）は、テロッパの中でプログラムで作っている音です。ほかの人の曲や音は使っていません。テロッパで作った動画に使えます。
+          テロッパに入っている BGM（5曲）・効果音（6種類）・見本の録画・テンプレートの見た目は、テロッパの中でプログラムで作っている自作のものです。ほかの人の曲や音は使っていません。CC0（パブリック・ドメイン）なので、作った動画やサムネイルに、クレジットなしで自由に使えます。
         </p>
+        <div class="section-title">ライセンス</div>
+        <p class="about-text">テロッパのソースコードは MIT ライセンスです。だれでも自由に使ったり、改造したりできます。</p>
         <div class="section-title">使っている部品</div>
         <p class="about-text">
           動画の読み書き：Mediabunny（MPL-2.0）／画面：Preact（MIT）／自動字幕：Transformers.js（Apache-2.0）・ONNX Runtime（MIT）ほか／字幕の文字：Noto Sans JP（OFL）
