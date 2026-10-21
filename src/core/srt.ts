@@ -65,7 +65,7 @@ export function importSrt(project: Project, cues: SrtCue[]): { project: Project;
   for (const cue of cues) {
     const loc = locate(p, cue.start + 1e-6);
     if (!loc) continue;
-    const end = Math.min(loc.clip.end, loc.sourceTime + (cue.end - cue.start));
+    const end = Math.min(loc.clip.end, loc.sourceTime + (cue.end - cue.start) * (loc.clip.speed ?? 1));
     if (end - loc.sourceTime < 0.05) continue;
     const text = cue.text
       .split('\n')

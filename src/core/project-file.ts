@@ -8,6 +8,7 @@ import {
 import { IMAGE_PLACES, type ImagePlace } from '../data/images';
 import { DEFAULT_BGM_VOLUME, musicTrack } from '../data/music';
 import { isSoundId } from '../data/sfx';
+import { ARROW_DIRECTIONS, isShapeKind, SHAPE_COLORS, SHAPE_THICKNESS, type ArrowDirection, type ShapeThickness } from '../data/shapes';
 import {
   defaultAudio,
   type Asset,
@@ -15,17 +16,19 @@ import {
   type Clip,
   type ImageOverlay,
   type Project,
+  type ShapeOverlay,
   type SoundEffect,
   type SourceAudio,
   type SourceInfo,
   type SourceRange,
   type Subtitle,
   type TrackRole,
+  type ZoomEffect,
 } from './project';
 
 export const PROJECT_FILE_FORMAT = 'teroppa-project';
 /** 版の番号。新しい項目を足したら上げる（古い版のファイルも読めるようにしておく） */
-export const PROJECT_FILE_VERSION = 4;
+export const PROJECT_FILE_VERSION = 5;
 export const PROJECT_FILE_EXTENSION = '.teroppa';
 
 /** 画像・曲の中身（Asset の id → base64 の文字） */
@@ -90,7 +93,9 @@ export function readProject(value: unknown): Project | null {
   for (const c of value.clips) {
     if (!isObject(c) || typeof c.id !== 'string' || typeof c.sourceId !== 'string') return null;
     if (!ids.has(c.sourceId) || !isTime(c.start) || !isTime(c.end) || c.end <= c.start) return null;
-    clips.push({ id: c.id, sourceId: c.sourceId, start: c.start, end: c.end });
+    const clip: Clip = { id: c.id, sourceId: c.sourceId, start: c.start, end: c.end };
+    if (typeof c.speed === 'number' && c.speed !== 1 && c.speed >= 0.25 && c.speed <= 8) clip.speed = c.speed;
+    clips.push(clip);
   }
   const audio: Record<string, SourceAudio> = {};
   const rawAudio = isObject(value.audio) ? value.audio : {};
@@ -128,6 +133,22 @@ export function readProject(value: unknown): Project | null {
       if (image) images.push(image);
     }
   }
+  const shapes: ShapeOverlay[] = [];
+  if (Array.isArray(value.shapes)) {
+    for (const g of value.shapes) {
+      const shape = readShape(g, ids);
+      if (shape) shapes.push(shape);
+    }
+  }
+  const zooms: ZoomEffect[] = [];
+  if (Array.isArray(value.zooms)) {
+    for (const z of value.zooms) {
+      if (!isObject(z) || typeof z.id !== 'string') continue;
+      const ranges = readRanges(z.ranges, ids);
+      if (ranges.length === 0 || !isTime(z.x) || !isTime(z.y) || !isTime(z.w) || z.w <= 0 || z.w > 1 || z.x > 1 || z.y > 1) continue;
+      zooms.push({ id: z.id, ranges, x: z.x, y: z.y, w: z.w });
+    }
+  }
   const effects: SoundEffect[] = [];
   if (Array.isArray(value.effects)) {
     for (const e of value.effects) {
@@ -150,6 +171,8 @@ export function readProject(value: unknown): Project | null {
     transcribed,
     assets,
     images,
+    shapes,
+    zooms,
     effects,
     effectsVolume: isTime(value.effectsVolume) && value.effectsVolume <= 2 ? value.effectsVolume : 1,
     bgm: readBgm(value.bgm, assets),
@@ -169,15 +192,33 @@ function readAsset(a: unknown): Asset | null {
 
 const PLACES: ImagePlace[] = [...IMAGE_PLACES.map((p) => p.value), 'free'];
 
-function readImage(i: unknown, sourceIds: Set<string>, assetIds: Set<string>): ImageOverlay | null {
-  if (!isObject(i) || typeof i.id !== 'string' || typeof i.assetId !== 'string' || !assetIds.has(i.assetId)) return null;
-  if (!Array.isArray(i.ranges) || !PLACES.includes(i.place as ImagePlace)) return null;
+function readRanges(value: unknown, sourceIds: Set<string>): SourceRange[] {
+  if (!Array.isArray(value)) return [];
   const ranges: SourceRange[] = [];
-  for (const r of i.ranges) {
+  for (const r of value) {
     if (!isObject(r) || typeof r.sourceId !== 'string' || !sourceIds.has(r.sourceId)) continue;
     if (!isTime(r.start) || !isTime(r.end) || r.end <= r.start) continue;
     ranges.push({ sourceId: r.sourceId, start: r.start, end: r.end });
   }
+  return ranges;
+}
+
+function readShape(g: unknown, sourceIds: Set<string>): ShapeOverlay | null {
+  if (!isObject(g) || typeof g.id !== 'string' || !isShapeKind(g.kind)) return null;
+  const ranges = readRanges(g.ranges, sourceIds);
+  if (ranges.length === 0) return null;
+  const unit = (v: unknown): v is number => isTime(v) && v <= 1;
+  if (!unit(g.x) || !unit(g.y) || !unit(g.w) || !unit(g.h) || g.w === 0 || g.h === 0) return null;
+  const color = typeof g.color === 'string' && /^#[0-9a-f]{6}$/i.test(g.color) ? g.color : SHAPE_COLORS[0].value;
+  const thickness = SHAPE_THICKNESS.find((t) => t.value === g.thickness)?.value ?? ('normal' as ShapeThickness);
+  const direction = ARROW_DIRECTIONS.find((d) => d.value === g.direction)?.value ?? ('down-left' as ArrowDirection);
+  return { id: g.id, kind: g.kind, ranges, x: g.x, y: g.y, w: g.w, h: g.h, color, thickness, direction };
+}
+
+function readImage(i: unknown, sourceIds: Set<string>, assetIds: Set<string>): ImageOverlay | null {
+  if (!isObject(i) || typeof i.id !== 'string' || typeof i.assetId !== 'string' || !assetIds.has(i.assetId)) return null;
+  if (!PLACES.includes(i.place as ImagePlace)) return null;
+  const ranges = readRanges(i.ranges, sourceIds);
   if (ranges.length === 0) return null;
   const unit = (v: unknown, max: number) => isTime(v) && v <= max;
   if (!unit(i.x, 1) || !unit(i.y, 1) || !unit(i.w, 1) || i.w === 0) return null;

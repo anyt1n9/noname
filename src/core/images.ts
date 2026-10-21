@@ -8,8 +8,9 @@ import {
   type ImagePlace,
 } from '../data/images';
 import type { Asset, ImageOverlay, Project } from './project';
+import { rangedAt, rangedOnTimeline } from './ranged';
 import { clamp } from './time';
-import { locate, sourceRangesOnTimeline, timelineToSource } from './timeline';
+import { timelineToSource } from './timeline';
 
 /** 画面の上での四角（画面の幅・高さに対する割合。x・y は真ん中） */
 export interface PlaceRect {
@@ -107,24 +108,18 @@ export function removeImage(project: Project, id: string): Project {
 
 /** 完成した動画の時刻 t に出ている画像（後ろのものほど手前に描く） */
 export function imagesAt(project: Project, t: number): ImageOverlay[] {
-  if (project.images.length === 0) return [];
-  const loc = locate(project, t);
-  if (!loc) return [];
-  const { sourceId } = loc.clip;
-  const st = loc.sourceTime;
-  return project.images.filter((image) => image.ranges.some((r) => r.sourceId === sourceId && r.start <= st && st < r.end));
+  return rangedAt(project, project.images, t);
 }
 
 /** タイムラインに見えている画像（見えている部分ごと） */
 export function imagesOnTimeline(project: Project): { id: string; key: string; from: number; to: number; name: string }[] {
-  const out: { id: string; key: string; from: number; to: number; name: string }[] = [];
-  for (const image of project.images) {
-    const name = project.assets.find((a) => a.id === image.assetId)?.name ?? '画像';
-    sourceRangesOnTimeline(project, image.ranges).forEach(([from, to], i) => {
-      if (to - from >= 0.05) out.push({ id: image.id, key: `${image.id}#${i}`, from, to, name });
-    });
-  }
-  return out.sort((a, b) => a.from - b.from);
+  return rangedOnTimeline(project, project.images).map(({ item, key, from, to }) => ({
+    id: item.id,
+    key,
+    from,
+    to,
+    name: project.assets.find((a) => a.id === item.assetId)?.name ?? '画像',
+  }));
 }
 
 /** 画像を描く四角（ピクセル）。width・height は画面の大きさ */

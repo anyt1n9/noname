@@ -1,13 +1,14 @@
 // タイムラインの計算（切る・並べ替える・時刻の変換）
-import type { Clip, Project, SourceRange } from './project';
+import { clipSpeed, type Clip, type Project, type SourceRange } from './project';
 
 export type { SourceRange } from './project';
 
 /** これより短いかけらは残さない（なぞった範囲の端がわずかにずれたときのため） */
 export const MIN_CLIP_SECONDS = 0.01;
 
+/** かたまりが完成した動画の中で占める長さ（秒）。速さを変えていれば、そのぶん短く・長くなる */
 export function clipLength(clip: Clip): number {
-  return clip.end - clip.start;
+  return (clip.end - clip.start) / clipSpeed(clip);
 }
 
 /** 完成した動画の長さ（秒） */
@@ -51,7 +52,7 @@ export function locate(project: Project, t: number): Location | null {
     const len = clipLength(clip);
     if (t < start + len || i === clips.length - 1) {
       const offset = Math.min(Math.max(0, t - start), len);
-      return { index: i, clip, clipStart: start, sourceTime: clip.start + offset };
+      return { index: i, clip, clipStart: start, sourceTime: Math.min(clip.end, clip.start + offset * clipSpeed(clip)) };
     }
     start += len;
   }
@@ -79,16 +80,17 @@ export function deleteRange(project: Project, from: number, to: number): Project
       // 消す範囲にかかっていない
       result.push(clip);
     } else {
+      const speed = clipSpeed(clip);
       // 前に残る部分
       const keepBefore = lo - start;
       if (keepBefore >= MIN_CLIP_SECONDS) {
-        result.push({ ...clip, end: clip.start + keepBefore });
+        result.push({ ...clip, end: clip.start + keepBefore * speed });
       }
       // 後ろに残る部分（前の部分も残るときは新しい ID を付ける）
       const keepAfter = end - hi;
       if (keepAfter >= MIN_CLIP_SECONDS) {
         const id = keepBefore >= MIN_CLIP_SECONDS ? `c${nextId++}` : clip.id;
-        result.push({ ...clip, id, start: clip.end - keepAfter });
+        result.push({ ...clip, id, start: clip.end - keepAfter * speed });
       }
     }
     start = end;
@@ -182,7 +184,8 @@ export function sourceRangeOnTimeline(project: Project, range: SourceRange): [nu
     if (clip.sourceId === range.sourceId) {
       const a = Math.max(clip.start, range.start);
       const b = Math.min(clip.end, range.end);
-      if (b > a) result.push([t + (a - clip.start), t + (b - clip.start)]);
+      const speed = clipSpeed(clip);
+      if (b > a) result.push([t + (a - clip.start) / speed, t + (b - clip.start) / speed]);
     }
     t += len;
   }
@@ -197,7 +200,10 @@ export function timelineToSource(project: Project, from: number, to: number): So
     const len = clipLength(clip);
     const a = Math.max(from, t);
     const b = Math.min(to, t + len);
-    if (b - a >= MIN_CLIP_SECONDS) result.push({ sourceId: clip.sourceId, start: clip.start + (a - t), end: clip.start + (b - t) });
+    const speed = clipSpeed(clip);
+    if (b - a >= MIN_CLIP_SECONDS) {
+      result.push({ sourceId: clip.sourceId, start: clip.start + (a - t) * speed, end: Math.min(clip.end, clip.start + (b - t) * speed) });
+    }
     t += len;
   }
   return result;
@@ -235,10 +241,11 @@ export function rangesOnTimeline(project: Project, bySource: Map<string, [number
         if (list[mid][1] <= clip.start) lo = mid + 1;
         else hi = mid;
       }
+      const speed = clipSpeed(clip);
       for (let i = lo; i < list.length && list[i][0] < clip.end; i++) {
         const a = Math.max(list[i][0], clip.start);
         const b = Math.min(list[i][1], clip.end);
-        if (b > a) out.push([t + (a - clip.start), t + (b - clip.start)]);
+        if (b > a) out.push([t + (a - clip.start) / speed, t + (b - clip.start) / speed]);
       }
     }
     t += clipLength(clip);
@@ -250,4 +257,57 @@ export function rangesOnTimeline(project: Project, bySource: Map<string, [number
 export function joinTimes(project: Project): { clipId: string; time: number }[] {
   const starts = clipStarts(project);
   return project.clips.map((c, i) => ({ clipId: c.id, time: starts[i] }));
+}
+
+/** 速さとして選べる値 */
+export const SPEEDS = [0.5, 1, 2, 4] as const;
+
+/**
+ * 完成した動画の from〜to 秒の速さを変える。かかっているかたまりは切り分ける。
+ * 字幕や画像は録画の中の時刻で持っているので、速さに合わせて自動で時間が変わる。
+ */
+export function setSpeed(project: Project, from: number, to: number, speed: number): Project {
+  const [lo, hi] = normalizeRange(from, to, totalDuration(project));
+  if (hi - lo < MIN_CLIP_SECONDS || !(speed > 0)) return project;
+  let nextId = project.nextId;
+  let changed = false;
+  const result: Clip[] = [];
+  let start = 0;
+  for (const clip of project.clips) {
+    const len = clipLength(clip);
+    const end = start + len;
+    const old = clipSpeed(clip);
+    if (end <= lo || start >= hi || old === speed) {
+      result.push(clip);
+      start = end;
+      continue;
+    }
+    changed = true;
+    const a = Math.max(lo, start) - start;
+    const b = Math.min(hi, end) - start;
+    const pieces: { from: number; to: number; speed: number }[] = [];
+    if (a >= MIN_CLIP_SECONDS) pieces.push({ from: 0, to: a, speed: old });
+    pieces.push({ from: a < MIN_CLIP_SECONDS ? 0 : a, to: len - b < MIN_CLIP_SECONDS ? len : b, speed });
+    if (len - b >= MIN_CLIP_SECONDS) pieces.push({ from: b, to: len, speed: old });
+    pieces.forEach((p, i) => {
+      const piece: Clip = {
+        ...clip,
+        id: i === 0 ? clip.id : `c${nextId++}`,
+        start: clip.start + p.from * old,
+        end: Math.min(clip.end, clip.start + p.to * old),
+      };
+      if (p.speed === 1) delete piece.speed;
+      else piece.speed = p.speed;
+      result.push(piece);
+    });
+    start = end;
+  }
+  if (!changed) return project;
+  return { ...project, clips: result, nextId };
+}
+
+/** 完成した動画の時刻 t のかたまりの速さ */
+export function speedAt(project: Project, t: number): number {
+  const loc = locate(project, t);
+  return loc ? clipSpeed(loc.clip) : 1;
 }

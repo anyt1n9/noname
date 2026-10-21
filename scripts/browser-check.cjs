@@ -322,7 +322,7 @@ async function main() {
   await page.locator('.selection-actions').getByRole('button', { name: 'ここに画像を置く' }).click();
   await page.waitForSelector('.item-list li');
   check('なぞった範囲に画像を置ける', (await page.locator('.decorate-panel .item-list li').count()) === 1);
-  await page.waitForSelector('.image-handles');
+  await page.waitForSelector('.box-handles');
   check('置いた画像を、プレビューの上で動かせる枠が出る', true);
   const red = async () =>
     page.evaluate(() => {
@@ -339,19 +339,20 @@ async function main() {
   px = await red();
   check('置き方を「中央」に変えられる', px.center[0] > 200 && px.topRight[0] < 40, JSON.stringify(px));
   // 枠をドラッグして左へ動かす
-  const hb = await page.locator('.image-handles').boundingBox();
+  const hb = await page.locator('.box-handles').boundingBox();
   await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2);
   await page.mouse.down();
   await page.mouse.move(hb.x + hb.width / 2 - 150, hb.y + hb.height / 2, { steps: 6 });
   await page.mouse.up();
   await page.waitForTimeout(400);
-  const hb2 = await page.locator('.image-handles').boundingBox();
+  const hb2 = await page.locator('.box-handles').boundingBox();
   check('画像をドラッグで動かせる', hb2.x < hb.x - 100, `${Math.round(hb.x)} → ${Math.round(hb2.x)}`);
   await page.getByRole('radiogroup', { name: '画像の置き方' }).getByRole('radio', { name: '右上' }).click();
   await page.waitForTimeout(400);
   await page.screenshot({ path: path.join(OUT, '15-decorate.png') });
   // つなぎ目（8秒）にフェード
   await page.locator('.timeline-wrap canvas').click({ position: { x: (7.8 / 16) * box3.width, y: 26 + 22 + 40 } });
+  await page.getByRole('tab', { name: 'フェード' }).click();
   await page.getByRole('checkbox', { name: /0:08 のつなぎ目をフェードにする/ }).check();
   check('つなぎ目にフェードを入れられる', await page.getByRole('checkbox', { name: /0:08 のつなぎ目/ }).isChecked());
   // BGM と効果音
@@ -420,6 +421,93 @@ async function main() {
     decoSaved.project.images.length === 1 && Object.keys(decoSaved.assetData).length === 2 && decoSaved.project.effects.length === 1,
     `画像${decoSaved.project.images.length}・中身${Object.keys(decoSaved.assetData).length}`,
   );
+
+  // 速さ・矢印や枠・拡大（v0.6）：真っ黒な録画（8秒）のあとに、模様と 660Hz の音の録画（8秒）
+  await page.getByRole('button', { name: /編集に戻る/ }).click();
+  await page.getByRole('button', { name: '新しく' }).click();
+  await page.evaluate(() => window.__pickQueue.push(['f.webm', 'a.webm']));
+  await page.getByRole('button', { name: '録画を選ぶ' }).click();
+  await page.waitForSelector('.toast');
+  await goStep(page, '飾り');
+  const box4 = await page.locator('.timeline-wrap canvas').boundingBox();
+  const drag4 = async (a, b, total) => {
+    const x = (t) => box4.x + (t / total) * box4.width;
+    await page.mouse.move(x(a), box4.y + 26 + 22 + 40);
+    await page.mouse.down();
+    await page.mouse.move(x(b), box4.y + 26 + 22 + 40, { steps: 6 });
+    await page.mouse.up();
+  };
+  // 8〜12秒（模様の録画の最初の4秒）を2倍にする
+  await page.getByRole('tab', { name: '速さ' }).click();
+  await drag4(8, 12, 16.017);
+  await page.getByRole('group', { name: '速さ' }).getByRole('button', { name: '2倍' }).click();
+  check('なぞった範囲を2倍の速さにすると短くなる', (await timeText(page)).endsWith('0:14.0'), await timeText(page));
+  // 1秒の位置に丸と矢印を置く
+  await page.getByRole('tab', { name: '矢印・枠' }).click();
+  await page.locator('.timeline-wrap canvas').click({ position: { x: (1 / 14) * box4.width, y: 26 + 22 + 40 } });
+  await page.getByRole('button', { name: '丸を置く' }).click();
+  await page.waitForTimeout(400);
+  const redOnRow = () =>
+    page.evaluate(() => {
+      const g = document.querySelector('.preview-box canvas').getContext('2d');
+      const row = g.getImageData(0, 360, 1280, 1).data;
+      let n = 0;
+      for (let i = 0; i < row.length; i += 4) if (row[i] > 200 && row[i + 1] < 120 && row[i + 2] < 120) n++;
+      return n;
+    });
+  check('丸を置くと、プレビューに赤い丸が出る', (await redOnRow()) > 4, `${await redOnRow()}ピクセル`);
+  await page.getByRole('radiogroup', { name: '図形の色' }).getByRole('radio', { name: '黄', exact: true }).click();
+  await page.waitForTimeout(300);
+  check('丸の色を変えられる', (await redOnRow()) === 0);
+  await page.getByRole('button', { name: '矢印を置く' }).click();
+  await page.getByRole('radiogroup', { name: '矢印の向き' }).getByRole('radio', { name: '右上へ' }).click();
+  await page.getByRole('group', { name: '図形の置き場所' }).getByRole('button', { name: '左下' }).click();
+  check('矢印を置いて、向きと場所を変えられる', (await page.locator('.decorate-panel .item-list li').count()) === 2);
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(OUT, '19-shapes.png') });
+  // 12.5秒あたり（模様の録画、元の速さの部分）の真ん中を2倍に拡大する
+  await page.getByRole('tab', { name: '拡大' }).click();
+  await drag4(11, 13.5, 14);
+  await page.locator('.selection-actions').getByRole('button', { name: 'ここを拡大する' }).click();
+  await page.waitForSelector('.box-handles.dashed');
+  check('拡大を入れると、拡大する場所を選ぶ点線の四角が出る', true);
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(OUT, '20-zoom-edit.png') });
+  await page.getByRole('button', { name: '選ぶのをやめる' }).click();
+  await page.locator('.timeline-wrap canvas').click({ position: { x: (12.5 / 14) * box4.width, y: 26 + 22 + 40 } });
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: path.join(OUT, '21-zoomed.png') });
+  const v6 = await exportTo(page, 'v06.mp4');
+  const v6File = path.join(OUT, 'v06.mp4');
+  check('速さ・図形・拡大の入った動画を書き出せる', Math.abs(Number(v6.format.duration) - 14) < 0.1, `${v6.format.duration}秒`);
+  const frame6 = (t) => {
+    const raw = execSync(`ffmpeg -v error -ss ${t} -i ${v6File} -frames:v 1 -vf scale=64:36 -f rawvideo -pix_fmt rgb24 -`);
+    return (x, y) => Array.from(raw.subarray((y * 64 + x) * 3, (y * 64 + x) * 3 + 3));
+  };
+  // 線は細いので、大きめの絵で数える
+  const raw2 = execSync(`ffmpeg -v error -ss 2 -i ${v6File} -frames:v 1 -vf scale=320:180 -f rawvideo -pix_fmt rgb24 -`);
+  let colored = 0;
+  for (let i = 0; i < raw2.length; i += 3) if (raw2[i] > 150 || raw2[i + 1] > 150) colored++;
+  check('書き出した動画に矢印・丸が入っている', colored > 100, `${colored}ピクセル`);
+  execSync(`ffmpeg -v error -y -ss 2 -i ${v6File} -frames:v 1 ${path.join(OUT, '19b-exported-shapes.png')}`);
+  // 拡大していない 10.5秒は左端が赤い帯、拡大した 12.5秒は左端が緑の帯（真ん中を2倍にしたので）
+  const left = (f) => f(1, 18);
+  const plain = left(frame6(10.5));
+  const zoomed = left(frame6(12.5));
+  check('書き出した動画が拡大されている', plain[0] > plain[1] && zoomed[1] > zoomed[0], `${JSON.stringify(plain)} → ${JSON.stringify(zoomed)}`);
+  execSync(`ffmpeg -v error -y -ss 12.5 -i ${v6File} -frames:v 1 ${path.join(OUT, '22-exported-zoom.png')}`);
+  // 2倍にした部分（8〜10秒）の音は 660Hz のまま（声の高さが変わらない）
+  const zcr = (() => {
+    const out = execSync(`ffmpeg -v info -ss 8.3 -t 1.4 -i ${v6File} -af astats=metadata=0 -f null - 2>&1`).toString();
+    const m = /Zero crossings rate: ([\d.]+)/.exec(out);
+    return m ? Number(m[1]) * 48000 / 2 : NaN;
+  })();
+  check('速さを変えても、音の高さは変わらない', zcr > 600 && zcr < 720, `${Math.round(zcr)}Hz`);
+  await page.evaluate(() => window.__saveNames.push('v06.teroppa'));
+  await page.keyboard.press('Control+s');
+  await page.waitForTimeout(500);
+  const v6Saved = JSON.parse((await readOpfs(page, 'v06.teroppa')).toString('utf8'));
+  check('作品ファイルに速さ・図形・拡大も入る', v6Saved.project.shapes.length === 2 && v6Saved.project.zooms.length === 1 && v6Saved.project.clips.some((c) => c.speed === 2));
 
   // 明るい画面・狭い画面
   await page.getByRole('button', { name: /編集に戻る/ }).click();

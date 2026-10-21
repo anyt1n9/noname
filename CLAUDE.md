@@ -2,7 +2,7 @@
 
 ブラウザで使う、YouTube の解説動画・ゲーム実況向けの動画編集ソフト。**仕様は `docs/spec.md` にある。作業の前に必ず読むこと。**
 
-- 現在の版：**v0.5.0**（v0.4 に加えて、画像・BGM・効果音・つなぎ目のフェード）。次に作る範囲は `docs/spec.md` の「19. 開発の順番」の v0.6（拡大・速さ・矢印や枠）。ユーザーの依頼で v1.0 まで順に作っている。
+- 現在の版：**v0.6.0**（v0.5 に加えて、画面の一部を拡大・速さを変える・矢印や枠）。次に作る範囲は `docs/spec.md` の「19. 開発の順番」の v0.7（声の仕上げ）。ユーザーの依頼で v1.0 まで順に作っている。
 - 版の番号は `package.json` の `version` だけで管理する（画面には `src/version.ts` から出る）。
 - ユーザーはプログラミング初学者で、動画編集も未経験。説明は専門用語を避け、何ができるようになったかを中心に伝える。
 - ユーザーは、すべての利用規約と法律を守ることを求めている。提案も必ずそれを守った内容にする。
@@ -71,6 +71,8 @@
 - 画像（`project.images`）は字幕と同じく録画の中の時刻（`ranges`）で持つ。位置は画面に対する割合（真ん中の x・y と幅 w）。画像・曲の中身は `project.assets`（情報だけ）とは別に、中身の SHA-256 を ID にして IndexedDB に保存し（`src/media/assets.ts`）、作品ファイルには `assetData`（base64）として入れる。
 - 効果音（`project.effects`）は録画の中の時刻の点。音は `src/core/sfx.ts` で作る（48kHz）。
 - BGM（`project.bgm`）は完成した動画の0秒からくり返す。大きさは `src/core/bgm.ts`（始まり・終わりのフェードと、しゃべっている間に小さくする）。しゃべっている範囲は画面側で声の大きさから計算し（`speechOnTimeline`）、書き出しの作業場所にも渡す。プレビューは入っている曲を `sound-worker.ts` で作って AudioBuffer にし、大きさの変化は少しずつ予約する。書き出しは、入っている曲は作業場所の中で作り、自分の曲は `LoopTrack` で少しずつ読みながらくり返す。
+- 速さ（v0.6）は `clip.speed`（ないときは 1）。タイムラインの長さは `clipLength`＝(end − start) ÷ speed で、時刻の変換（`locate`・`sourceRangeOnTimeline`・`timelineToSource`・`rangesOnTimeline`）はすべて速さを入れて計算する。録画の時刻を直接足し引きしない。音は `TimeStretcher`（`src/core/stretch.ts`、WSOLA）で声の高さを変えずに速さを変える（書き出しは `StretchReader`、プレビューは `scheduleStretched`）。
+- 画像・矢印や枠（`project.shapes`）・拡大（`project.zooms`）は、どれも録画の中の時刻の `ranges` を持つ（共通の計算は `src/core/ranged.ts`）。拡大は映像を描く前に `applyZoom` で描く位置を変える（字幕などは拡大しない）。プレビューの上で動かす枠は `src/ui/BoxHandles.tsx`。
 - つなぎ目のフェード（`project.joinFades`：つなぎ目の後ろのかたまりの ID、`endFade`）は `src/core/fades.ts`。かたまりを切り分けると前の部分が ID を引き継ぐので、フェードはつなぎ目に残る。フェードは録画の音だけにかけ、BGM・効果音にはかけない。
 - 字幕のフォントは Noto Sans JP（`@fontsource/noto-sans-jp`）を FontFace で登録し、使う文字の分だけ読み込む（`src/media/caption-font.ts`）。
 - `.npmrc` で部品のインストールスクリプトを止めている（transformers.js が連れてくる onnxruntime-node は、ブラウザでは使わないうえ、インストール時に外部から追加のファイルを取ろうとするため）。

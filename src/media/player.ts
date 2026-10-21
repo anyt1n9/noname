@@ -3,10 +3,11 @@ import type { AudioBufferSink } from 'mediabunny';
 import { bgmEnvelope, bgmLevel, bgmPoints } from '../core/bgm';
 import { effectsOnTimeline } from '../core/effects';
 import { fadeLevel, fadeWindows } from '../core/fades';
-import { activeTracks, emptyProject, sourceAudio, type Clip, type Project } from '../core/project';
+import { activeTracks, clipSpeed, emptyProject, sourceAudio, type Clip, type Project } from '../core/project';
+import { TimeStretcher } from '../core/stretch';
 import { clamp } from '../core/time';
 import { clipLength, clipStarts, locate, totalDuration } from '../core/timeline';
-import { drawOverlays, overlaysReady, prepareOverlays } from './compose';
+import { applyZoom, drawOverlays, overlaysReady, prepareOverlays, resetZoom } from './compose';
 import { PREVIEW_HEIGHT, PREVIEW_WIDTH, type SourceRegistry } from './registry';
 import { assetMusic, builtinMusic, effectBuffer } from './sounds';
 
@@ -289,14 +290,18 @@ export class Player {
       try {
         for await (const frame of source.canvasSink.canvases(sourceFrom, clip.end)) {
           if (gen !== this.generation) return;
-          const showAt = clipStart + Math.max(0, frame.timestamp - clip.start);
-          const hideAt = clipStart + Math.min(length, frame.timestamp + frame.duration - clip.start);
+          const speed = clipSpeed(clip);
+          const showAt = clipStart + Math.max(0, frame.timestamp - clip.start) / speed;
+          const hideAt = clipStart + Math.min(length, (frame.timestamp + frame.duration - clip.start) / speed);
           while (gen === this.generation && this.currentTime() < showAt) await nextFrame();
           if (gen !== this.generation) return;
           // 表示が間に合わなかったコマは飛ばす
           if (this.currentTime() > hideAt + 0.05) continue;
+          const t = Math.max(showAt, this.currentTime());
+          applyZoom(this.draw2d, this.project, t, PREVIEW_WIDTH, PREVIEW_HEIGHT);
           this.draw2d.drawImage(frame.canvas, 0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
-          this.overlay(Math.max(showAt, this.currentTime()));
+          resetZoom(this.draw2d);
+          this.overlay(t);
         }
       } catch (e) {
         if (gen === this.generation) console.warn('プレビューの映像を読めませんでした', e);
@@ -340,6 +345,7 @@ export class Player {
     const trackGain = ctx.createGain();
     trackGain.gain.value = gainValue;
     trackGain.connect(this.program!);
+    if (clipSpeed(clip) !== 1) return this.scheduleStretched(gen, sink, clip, clipStart, sourceFrom, trackGain);
     try {
       for await (const { buffer, timestamp, duration } of sink.buffers(sourceFrom, clip.end)) {
         if (gen !== this.generation) return;
@@ -367,6 +373,67 @@ export class Player {
         }
         while (gen === this.generation && when - ctx.currentTime > AUDIO_AHEAD) await sleep(100);
       }
+    } catch (e) {
+      if (gen === this.generation) console.warn('プレビューの音を読めませんでした', e);
+    }
+  }
+
+  /** 速さを変えたかたまりの音：声の高さを変えずに速さを変えてから鳴らす */
+  private async scheduleStretched(
+    gen: number,
+    sink: AudioBufferSink,
+    clip: Clip,
+    clipStart: number,
+    sourceFrom: number,
+    out: GainNode,
+  ): Promise<void> {
+    const ctx = this.ctx!;
+    const speed = clipSpeed(clip);
+    /** 出す音が始まる、完成した動画の時刻と、終わり */
+    const startT = clipStart + (sourceFrom - clip.start) / speed;
+    const endT = clipStart + clipLength(clip);
+    let stretcher: TimeStretcher | null = null;
+    let rate = 0;
+    let written = 0;
+    const schedule = (data: Float32Array[]) => {
+      const room = Math.floor((endT - startT) * rate) - written;
+      const length = Math.min(data[0].length, room);
+      if (length <= 0) return;
+      const buffer = ctx.createBuffer(data.length, length, rate);
+      data.forEach((d, c) => buffer.copyToChannel(d.subarray(0, length) as Float32Array<ArrayBuffer>, c));
+      let when = this.ctxTime(startT + written / rate);
+      let offset = 0;
+      written += length;
+      const now = ctx.currentTime;
+      if (when < now) {
+        offset = now - when;
+        when = now;
+      }
+      if (offset >= buffer.duration) return;
+      const node = ctx.createBufferSource();
+      node.buffer = buffer;
+      node.connect(out);
+      node.start(when, offset);
+      this.nodes.add(node);
+      node.onended = () => this.nodes.delete(node);
+    };
+    try {
+      for await (const { buffer, timestamp, duration } of sink.buffers(sourceFrom, clip.end)) {
+        if (gen !== this.generation) return;
+        const useFrom = Math.max(timestamp, sourceFrom);
+        const useTo = Math.min(timestamp + duration, clip.end);
+        if (useTo <= useFrom) continue;
+        if (!stretcher) {
+          rate = buffer.sampleRate;
+          stretcher = new TimeStretcher(buffer.numberOfChannels, rate, speed);
+        }
+        const a = Math.round((useFrom - timestamp) * rate);
+        const b = Math.min(buffer.length, Math.round((useTo - timestamp) * rate));
+        const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c).subarray(a, b));
+        schedule(stretcher.push(channels));
+        while (gen === this.generation && this.ctxTime(startT + written / rate) - ctx.currentTime > AUDIO_AHEAD) await sleep(100);
+      }
+      if (stretcher && gen === this.generation) schedule(stretcher.flush());
     } catch (e) {
       if (gen === this.generation) console.warn('プレビューの音を読めませんでした', e);
     }
@@ -464,8 +531,7 @@ export class Player {
     }
     const key = `${loc.clip.sourceId}:${loc.sourceTime}`;
     if (this.still?.key === key) {
-      this.draw2d.drawImage(this.still.canvas, 0, 0);
-      this.overlay(time);
+      this.paintStill(time);
       return;
     }
     const source = await this.registry.open(loc.clip.sourceId).catch(() => null);
@@ -480,10 +546,20 @@ export class Player {
       if (frame) this.draw2d.drawImage(frame.canvas, 0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT);
       else this.clear();
       this.keepStill(key);
-      this.overlay(time);
+      this.paintStill(time);
     } catch (e) {
       console.warn('プレビューの映像を読めませんでした', e);
     }
+  }
+
+  /** 覚えている映像（拡大していない形）を、拡大と重ねるものを付けて描く */
+  private paintStill(time: number): void {
+    if (!this.still) return;
+    this.clear();
+    applyZoom(this.draw2d, this.project, time, PREVIEW_WIDTH, PREVIEW_HEIGHT);
+    this.draw2d.drawImage(this.still.canvas, 0, 0);
+    resetZoom(this.draw2d);
+    this.overlay(time);
   }
 
   private keepStill(key: string): void {

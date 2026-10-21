@@ -5,8 +5,9 @@ import { bgmGains, type BgmEnvelope } from '../core/bgm';
 import { effectsOnTimeline } from '../core/effects';
 import { fadeGains } from '../core/fades';
 import { audioSlice, samplesFor } from '../core/frames';
-import { activeTracks, sourceAudio, type Clip, type Project } from '../core/project';
+import { activeTracks, clipSpeed, sourceAudio, type Clip, type Project } from '../core/project';
 import { renderSound } from '../core/sfx';
+import { TimeStretcher } from '../core/stretch';
 import { clipLength } from '../core/timeline';
 import { OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE } from '../data/quality';
 import type { SoundId } from '../data/sfx';
@@ -100,6 +101,65 @@ export class TrackReader {
       this.ended = true;
       await this.close();
     }
+  }
+}
+
+/** 録画の音を読む係（速さを変えたかたまりでも同じように使う） */
+interface SampleReader {
+  read(count: number): Promise<Float32Array[]>;
+  close(): Promise<void>;
+}
+
+/** 速さを変えたかたまりの音。録画の音を読みながら、声の高さを変えずに速さを変える */
+export class StretchReader implements SampleReader {
+  private stretcher: TimeStretcher;
+  private chunks: Float32Array[][] = [];
+  private queued = 0;
+  private consumed = 0;
+  private sourceNeeded: number;
+  private flushed = false;
+
+  constructor(
+    private reader: TrackReader,
+    clip: Clip,
+  ) {
+    this.stretcher = new TimeStretcher(OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE, clipSpeed(clip));
+    this.sourceNeeded = samplesFor(clip.end - clip.start, OUTPUT_SAMPLE_RATE);
+  }
+
+  async read(count: number): Promise<Float32Array[]> {
+    while (this.queued < count && !this.flushed) {
+      if (this.consumed < this.sourceNeeded) {
+        const take = Math.min(BLOCK, this.sourceNeeded - this.consumed);
+        this.consumed += take;
+        this.add(this.stretcher.push(await this.reader.read(take)));
+      } else {
+        this.add(this.stretcher.flush());
+        this.flushed = true;
+      }
+    }
+    const out = Array.from({ length: OUTPUT_CHANNELS }, () => new Float32Array(count));
+    let filled = 0;
+    while (filled < count && this.chunks.length > 0) {
+      const head = this.chunks[0];
+      const take = Math.min(head[0].length, count - filled);
+      for (let c = 0; c < OUTPUT_CHANNELS; c++) out[c].set(head[c].subarray(0, take), filled);
+      filled += take;
+      this.queued -= take;
+      if (take === head[0].length) this.chunks.shift();
+      else this.chunks[0] = head.map((h) => h.subarray(take));
+    }
+    return out;
+  }
+
+  private add(part: Float32Array[]): void {
+    if (part[0].length === 0) return;
+    this.chunks.push(part);
+    this.queued += part[0].length;
+  }
+
+  async close(): Promise<void> {
+    await this.reader.close();
   }
 }
 
@@ -230,10 +290,12 @@ export async function writeAudio(ctx: AudioContextForExport): Promise<void> {
     const length = clipLength(clip);
     const needed = samplesFor(length, OUTPUT_SAMPLE_RATE);
     const available = ctx.tracks.get(clip.sourceId) ?? [];
-    const readers: { reader: TrackReader; gain: number }[] = [];
+    const readers: { reader: SampleReader; gain: number }[] = [];
     for (const { index, gain } of activeTracks(sourceAudio(ctx.project, clip.sourceId))) {
       const track = available[index];
-      if (track && gain > 0) readers.push({ reader: new TrackReader(track, clip), gain });
+      if (!track || gain <= 0) continue;
+      const reader = new TrackReader(track, clip);
+      readers.push({ reader: clipSpeed(clip) === 1 ? reader : new StretchReader(reader, clip), gain });
     }
     let written = 0;
     try {

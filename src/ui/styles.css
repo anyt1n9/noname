@@ -1231,8 +1231,8 @@ kbd {
   line-height: 1.6;
 }
 
-/* プレビューの上で画像を動かす枠 */
-.image-handles {
+/* プレビューの上で画像などを動かす枠 */
+.box-handles {
   position: absolute;
   border: 2px solid var(--accent);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
@@ -1241,7 +1241,7 @@ kbd {
   z-index: 2;
 }
 
-.image-handles .resize {
+.box-handles .resize {
   position: absolute;
   right: -8px;
   bottom: -8px;
@@ -1251,4 +1251,70 @@ kbd {
   background: var(--accent);
   border: 2px solid #fff;
   cursor: nwse-resize;
+}
+
+.box-handles.dashed {
+  border-style: dashed;
+  background: rgba(255, 138, 61, 0.08);
+}
+
+/* 飾りの手順のタブ（v0.6） */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+.tabs button {
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.tabs button.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.segmented.arrows button {
+  min-width: 32px;
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.segmented button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.shape-mark {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+}
+
+.shape-mark.circle {
+  height: 14px;
+  border-radius: 50%;
+}
+
+.shape-mark.arrow {
+  border: none;
+  width: auto;
+  height: auto;
+}
+
+.shape-mark.arrow::before {
+  content: '↙';
+  font-weight: 700;
 }

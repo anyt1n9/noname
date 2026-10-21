@@ -1,7 +1,7 @@
 // タイムライン。なぞって消す範囲を選ぶ・再生位置を動かす・かたまりを並べ替える
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { peakBetween } from '../core/peaks';
-import type { Project } from '../core/project';
+import { clipSpeed, type Project } from '../core/project';
 import { clamp, formatClock } from '../core/time';
 import { clipLength, clipStarts, dropIndex, totalDuration } from '../core/timeline';
 import { Icon, type IconName } from './icons';
@@ -553,7 +553,8 @@ function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
       g.clip();
       g.fillStyle = colors.text;
       g.textAlign = 'left';
-      g.fillText(`${source?.name ?? ''}  ${formatClock(clipLength(clip))}`, x0 + 6, top + HEADER_H / 2 + 1);
+      const speed = clipSpeed(clip);
+      g.fillText(`${speed !== 1 ? `【${speed}倍】` : ''}${source?.name ?? ''}  ${formatClock(clipLength(clip))}`, x0 + 6, top + HEADER_H / 2 + 1);
       g.restore();
     }
     // 音の形
@@ -564,10 +565,11 @@ function draw(g: CanvasRenderingContext2D, a: DrawArgs): void {
       g.fillStyle = colors.wave;
       const from = Math.max(0, Math.floor(x0));
       const to = Math.min(width, Math.ceil(x1 - 1));
-      const secPerPx = 1 / pxPerSec;
+      const speed = clipSpeed(clip);
+      const secPerPx = speed / pxPerSec;
       for (let x = from; x < to; x++) {
         const tl = offset + x / pxPerSec - starts[i];
-        const st = clip.start + tl;
+        const st = clip.start + tl * speed;
         const p = peakBetween(peaks, a.binSeconds, st, st + secPerPx);
         const h = Math.max(1, p * half);
         g.fillRect(x, mid - h, 1, h * 2);

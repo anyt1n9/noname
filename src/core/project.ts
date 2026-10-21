@@ -1,6 +1,7 @@
 // 作品（プロジェクト）のデータ。元の録画は書き換えず、
 // 「どの録画の、どこからどこまでを、どの順に使うか」だけを持つ。
 import type { ImagePlace } from '../data/images';
+import type { ArrowDirection, ShapeKind, ShapeThickness } from '../data/shapes';
 import type { SoundId } from '../data/sfx';
 import { DEFAULT_SUBTITLE_STYLE, type SubtitleStyle } from '../data/subtitle-style';
 
@@ -33,6 +34,12 @@ export interface Clip {
   sourceId: string;
   start: number;
   end: number;
+  /** 速さ（2 なら2倍の速さ。ないときは 1）。タイムラインの長さは (end - start) / speed */
+  speed?: number;
+}
+
+export function clipSpeed(clip: Clip): number {
+  return clip.speed ?? 1;
 }
 
 /** 録画に入っている音それぞれの役割 */
@@ -102,6 +109,31 @@ export interface ImageOverlay {
   w: number;
 }
 
+/** 矢印・四角い枠・丸 */
+export interface ShapeOverlay {
+  id: string;
+  kind: ShapeKind;
+  ranges: SourceRange[];
+  /** 図形を囲む四角の真ん中と大きさ（x・w は画面の幅、y・h は画面の高さに対する割合） */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string;
+  thickness: ShapeThickness;
+  /** 矢印の向き（矢印のときだけ使う） */
+  direction: ArrowDirection;
+}
+
+/** 画面の一部を拡大する。x・y は見せる範囲の真ん中、w は幅（画面に対する割合。高さも同じ割合） */
+export interface ZoomEffect {
+  id: string;
+  ranges: SourceRange[];
+  x: number;
+  y: number;
+  w: number;
+}
+
 /** 効果音。録画の中の時刻に置くので、カットしても映像とずれない */
 export interface SoundEffect {
   id: string;
@@ -137,6 +169,10 @@ export interface Project {
   assets: Asset[];
   /** 映像に重ねる画像（後ろのものほど手前） */
   images: ImageOverlay[];
+  /** 矢印・枠（画像より手前に描く） */
+  shapes: ShapeOverlay[];
+  /** 画面の一部を拡大する */
+  zooms: ZoomEffect[];
   effects: SoundEffect[];
   /** 効果音の大きさ（1 でそのまま） */
   effectsVolume: number;
@@ -160,6 +196,8 @@ export function emptyProject(): Project {
     transcribed: {},
     assets: [],
     images: [],
+    shapes: [],
+    zooms: [],
     effects: [],
     effectsVolume: 1,
     bgm: null,

@@ -5,7 +5,10 @@ import { speechOnTimeline } from '../core/bgm';
 import { addEffect, effectLength, effectsOnTimeline, removeEffect } from '../core/effects';
 import { activeJoinFades, fadeSourceChanges, nearestJoin, toggleJoinFade } from '../core/fades';
 import { guideMessage } from '../core/guide';
-import { addImage, imagesAt, imagesOnTimeline, moveImage, removeImage, setImagePlace, setImageTime, type PlaceRect } from '../core/images';
+import { addImage, imagesAt, imagesOnTimeline, moveImage, removeImage, setImagePlace, setImageTime } from '../core/images';
+import { rangedAt } from '../core/ranged';
+import { addShape, moveShape, placeShape, removeShape, setShapeStyle, setShapeTime, shapesAt, shapesOnTimeline } from '../core/shapes';
+import { addZoom, removeZoom, setZoomFactor, setZoomRect, setZoomTime, zoomsOnTimeline } from '../core/zoom';
 import { canRedo, canUndo, createHistory, record, redo, undo, type History } from '../core/history';
 import { actionForKey } from '../core/keys';
 import {
@@ -38,8 +41,10 @@ import {
   subtitlesOnTimeline,
 } from '../core/subtitles';
 import { formatClock } from '../core/time';
-import { deleteRange, locate as locateTime, moveClip, totalDuration } from '../core/timeline';
-import { NEW_IMAGE_SECONDS } from '../data/images';
+import { clipStarts, deleteRange, locate as locateTime, moveClip, setSpeed, speedAt, totalDuration } from '../core/timeline';
+import { MIN_IMAGE_WIDTH, NEW_IMAGE_SECONDS } from '../data/images';
+import { NEW_SHAPE_SECONDS, SHAPE_KINDS, type ShapeKind } from '../data/shapes';
+import { MIN_ZOOM_WIDTH, NEW_ZOOM_SECONDS } from '../data/zoom';
 import { LONG_STEP_SECONDS, STEP_SECONDS } from '../data/keys';
 import { DEFAULT_BGM_VOLUME, musicTrack } from '../data/music';
 import type { SoundId } from '../data/sfx';
@@ -69,10 +74,10 @@ import { assetMusic, builtinMusic, effectBuffer } from '../media/sounds';
 import { loadWork, saveWork } from '../media/storage';
 import { AudioDialog, LISTEN_SECONDS } from './AudioDialog';
 import { AboutDialog, BusyOverlay, DropOverlay, KeysDialog, Toast, type Notice } from './Dialogs';
-import { DecoratePanel } from './DecoratePanel';
+import { BoxHandles, type Box } from './BoxHandles';
+import { DecoratePanel, type DecorateTab, type Selected } from './DecoratePanel';
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
-import { ImageHandles } from './ImageHandles';
 import { SoundPanel } from './SoundPanel';
 import { SilencePanel } from './SilencePanel';
 import { SubtitlePanel } from './SubtitlePanel';
@@ -97,6 +102,38 @@ function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
+
+/** 選んでいるものを、プレビューの上の四角の位置に動かす */
+function moveBox(project: Project, target: Selected, box: Box): Project {
+  if (target.kind === 'image') return moveImage(project, target.id, { x: box.x, y: box.y, w: box.w });
+  if (target.kind === 'shape') return moveShape(project, target.id, box);
+  return setZoomRect(project, target.id, { x: box.x, y: box.y, w: box.w });
+}
+
+/** 選んでいるものを動かす四角（いま映っていなければ null） */
+function boxHandleFor(
+  project: Project,
+  draft: (Selected & { box: Box }) | null,
+  target: Selected,
+  t: number,
+): { box: Box; lockRatio?: number; minW: number; maxW: number; variant: 'solid' | 'dashed'; label: string } | null {
+  const shown = draft && draft.id === target.id ? moveBox(project, target, draft.box) : project;
+  if (target.kind === 'image') {
+    const image = imagesAt(shown, t).find((i) => i.id === target.id);
+    if (!image) return null;
+    const asset = shown.assets.find((a) => a.id === image.assetId);
+    const ratio = asset && asset.height > 0 ? FRAME_ASPECT / (asset.width / asset.height) : 1;
+    return { box: { x: image.x, y: image.y, w: image.w, h: image.w * ratio }, lockRatio: ratio, minW: MIN_IMAGE_WIDTH, maxW: 1, variant: 'solid', label: '選んだ画像（ドラッグで動かせます）' };
+  }
+  if (target.kind === 'shape') {
+    const shape = shapesAt(shown, t).find((g) => g.id === target.id);
+    if (!shape) return null;
+    return { box: { x: shape.x, y: shape.y, w: shape.w, h: shape.h }, minW: 0.02, maxW: 1, variant: 'solid', label: '選んだ矢印・枠（ドラッグで動かせます）' };
+  }
+  const zoom = rangedAt(shown, shown.zooms, t).find((z) => z.id === target.id);
+  if (!zoom) return null;
+  return { box: { x: zoom.x, y: zoom.y, w: zoom.w, h: zoom.w }, lockRatio: 1, minW: MIN_ZOOM_WIDTH, maxW: 1, variant: 'dashed', label: '拡大する場所（ドラッグで動かせます）' };
 }
 
 export function App() {
@@ -130,9 +167,10 @@ export function App() {
   const [listening, setListening] = useState<number | null>(null);
   /** 文章で編集：動画から消すか確かめている字幕 */
   const [pendingCut, setPendingCut] = useState<string | null>(null);
-  /** 飾り：選んでいる画像と、ドラッグで動かしている途中の位置 */
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [imageDraft, setImageDraft] = useState<{ id: string; rect: PlaceRect } | null>(null);
+  /** 飾り：開いているタブ・選んでいるもの・ドラッグで動かしている途中の位置 */
+  const [decorateTab, setDecorateTab] = useState<DecorateTab>('image');
+  const [selected, setSelected] = useState<Selected | null>(null);
+  const [boxDraft, setBoxDraft] = useState<(Selected & { box: Box }) | null>(null);
   /** BGM・効果音：試しに鳴らしているもの */
   const [previewing, setPreviewing] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -208,7 +246,30 @@ export function App() {
           label: '画像',
           items: timelineImages.map((i) => ({ key: i.key, id: i.id, from: i.from, to: i.to, text: i.name })),
           resizable: true,
-          selectedId: selectedImage,
+          selectedId: selected?.kind === 'image' ? selected.id : null,
+        }
+      : null;
+  const timelineShapes = useMemo(() => shapesOnTimeline(project), [project.shapes, project.clips]);
+  const timelineZooms = useMemo(() => zoomsOnTimeline(project), [project.zooms, project.clips]);
+  const shapeName = (kind: ShapeKind) => SHAPE_KINDS.find((k) => k.value === kind)?.label ?? '';
+  const shapeLane: TimelineLane | null =
+    timelineShapes.length > 0
+      ? {
+          id: 'shapes',
+          label: '矢印・枠',
+          items: timelineShapes.map((g) => ({ key: g.key, id: g.id, from: g.from, to: g.to, text: shapeName(g.kind) })),
+          resizable: true,
+          selectedId: selected?.kind === 'shape' ? selected.id : null,
+        }
+      : null;
+  const zoomLane: TimelineLane | null =
+    timelineZooms.length > 0
+      ? {
+          id: 'zooms',
+          label: '拡大',
+          items: timelineZooms.map((z) => ({ key: z.key, id: z.id, from: z.from, to: z.to, text: `${z.factor.toFixed(1)}倍` })),
+          resizable: true,
+          selectedId: selected?.kind === 'zoom' ? selected.id : null,
         }
       : null;
   const effectLane: TimelineLane | null =
@@ -227,7 +288,7 @@ export function App() {
     : '';
   const bgmLane: TimelineLane | null =
     project.bgm && total > 0 ? { id: 'bgm', label: 'BGM', items: [{ key: 'bgm', id: 'bgm', from: 0, to: total, text: bgmName }], resizable: false } : null;
-  const lanes = [subtitleLane, imageLane, effectLane, bgmLane].filter((l): l is TimelineLane => l !== null);
+  const lanes = [subtitleLane, imageLane, shapeLane, zoomLane, effectLane, bgmLane].filter((l): l is TimelineLane => l !== null);
 
   // しゃべっている範囲（BGM を小さくするため）。BGM を小さくする設定のときだけ計算する
   const speech = useMemo(() => {
@@ -240,11 +301,15 @@ export function App() {
     return speechOnTimeline(project, levels);
   }, [project.bgm?.duck, project.clips, project.audio, analysisReady ? 'ready' : levelsTick]);
 
-  /** ドラッグで動かしている途中の画像も映すため、プレビューにはこの作品を渡す */
-  const shownProject = useMemo(
-    () => (imageDraft ? moveImage(project, imageDraft.id, imageDraft.rect) : project),
-    [project, imageDraft],
-  );
+  /** 拡大する場所を選んでいる間は、その拡大をしない画面を見せる */
+  const editingZoom = step === 'decorate' && decorateTab === 'zoom' && selected?.kind === 'zoom' ? selected.id : null;
+  /** ドラッグで動かしている途中のものも映すため、プレビューにはこの作品を渡す */
+  const shownProject = useMemo(() => {
+    let p = project;
+    if (boxDraft) p = moveBox(p, boxDraft, boxDraft.box);
+    if (editingZoom) p = { ...p, zooms: p.zooms.filter((z) => z.id !== editingZoom) };
+    return p;
+  }, [project, boxDraft, editingZoom]);
 
   /** 字幕の端をタイムラインで動かしたとき：完成した動画の時刻を、録画の中の時刻に直す */
   const resizeSubtitle = (item: LaneItem, from: number, to: number) => {
@@ -252,7 +317,7 @@ export function App() {
     const sub = p.subtitles.find((x) => x.id === item.id);
     const loc = locateTime(p, (item.from + item.to) / 2);
     if (!sub || !loc) return;
-    const toSource = (t: number) => loc.clip.start + (t - loc.clipStart);
+    const toSource = (t: number) => loc.clip.start + (t - loc.clipStart) * (loc.clip.speed ?? 1);
     const start = Math.abs(from - item.from) > 1e-6 ? toSource(from) : sub.start;
     const end = Math.abs(to - item.to) > 1e-6 ? toSource(to) : sub.end;
     apply(setSubtitleTime(p, sub.id, start, end));
@@ -524,7 +589,7 @@ export function App() {
     setOpenIds([]);
     setPermissionIds([]);
     setSelection(null);
-    setSelectedImage(null);
+    setSelected(null);
     setStep('import');
     playerRef.current?.seek(0);
     setNotice({
@@ -578,7 +643,7 @@ export function App() {
     setOpenIds([]);
     setPermissionIds([]);
     setSelection(null);
-    setSelectedImage(null);
+    setSelected(null);
     setStep('import');
   };
 
@@ -621,7 +686,7 @@ export function App() {
   const goStep = (id: StepId) => {
     setPendingCut(null);
     stopPreview();
-    if (id !== 'decorate') setSelectedImage(null);
+    if (id !== 'decorate') setSelected(null);
     if (id === 'export') return goExport();
     if (id !== 'import' && (project.clips.length === 0 || missing.length > 0)) return;
     setSelection(null);
@@ -675,19 +740,65 @@ export function App() {
     }
     apply(r.project);
     setSelection(null);
-    setSelectedImage(r.id);
+    setSelected({ kind: 'image', id: r.id });
     playerRef.current?.seek(from);
   };
 
-  /** 画像の出す時間を、タイムラインの端のドラッグで変える */
-  const resizeImage = (item: LaneItem, from: number, to: number) => {
+  /** なぞった範囲、なければ再生位置から seconds 秒 */
+  const rangeOrNow = (seconds: number): [number, number] => {
+    const now = playerRef.current?.currentTime() ?? 0;
+    return selection ?? [now, Math.min(totalDuration(projectRef.current), now + seconds)];
+  };
+
+  const addShapeAt = (kind: ShapeKind) => {
+    const [from, to] = rangeOrNow(NEW_SHAPE_SECONDS);
+    const r = addShape(projectRef.current, kind, from, to, FRAME_ASPECT);
+    if (!r.id) return;
+    apply(r.project);
+    setSelection(null);
+    setSelected({ kind: 'shape', id: r.id });
+    playerRef.current?.seek(from);
+  };
+
+  const addZoomAt = () => {
+    const [from, to] = rangeOrNow(NEW_ZOOM_SECONDS);
+    const r = addZoom(projectRef.current, from, to);
+    if (!r.id) return;
+    apply(r.project);
+    setSelection(null);
+    setDecorateTab('zoom');
+    setSelected({ kind: 'zoom', id: r.id });
+    // 寄り終わったあたりを見せる
+    playerRef.current?.seek(Math.min(to, from + 0.5));
+  };
+
+  /** 出す時間を、タイムラインの端のドラッグで変える（画像・矢印や枠・拡大） */
+  const resizeRanged = (lane: string, item: LaneItem, from: number, to: number) => {
     const p = projectRef.current;
-    const pieces = imagesOnTimeline(p).filter((x) => x.id === item.id);
+    const pieces = (lane === 'images' ? imagesOnTimeline(p) : lane === 'shapes' ? shapesOnTimeline(p) : zoomsOnTimeline(p)).filter((x) => x.id === item.id);
     if (pieces.length === 0) return;
     const start = Math.abs(from - item.from) > 1e-6 ? from : pieces[0].from;
     const end = Math.abs(to - item.to) > 1e-6 ? to : pieces[pieces.length - 1].to;
-    apply(setImageTime(p, item.id, start, end));
+    const set = lane === 'images' ? setImageTime : lane === 'shapes' ? setShapeTime : setZoomTime;
+    apply(set(p, item.id, start, end));
   };
+
+  const removeSelected = (target: Selected) => {
+    const p = projectRef.current;
+    apply(target.kind === 'image' ? removeImage(p, target.id) : target.kind === 'shape' ? removeShape(p, target.id) : removeZoom(p, target.id));
+    if (selected?.id === target.id) setSelected(null);
+  };
+
+  const selectItem = (target: Selected | null) => {
+    setSelected(target);
+    if (!target) return;
+    setDecorateTab(target.kind);
+    const list = target.kind === 'image' ? timelineImages : target.kind === 'shape' ? timelineShapes : timelineZooms;
+    const piece = list.find((x) => x.id === target.id);
+    const t = playerRef.current?.currentTime() ?? 0;
+    if (piece && !(t >= piece.from && t < piece.to)) playerRef.current?.seek(target.kind === 'zoom' ? Math.min(piece.to, piece.from + 0.5) : piece.from);
+  };
+
 
   /** BGM：自分で用意した曲を選ぶ */
   const pickMusic = async () => {
@@ -835,11 +946,13 @@ export function App() {
   };
 
   const message = guideMessage(project, { step, hasSelection: selection !== null, missingSources: missing.length });
-  /** プレビューの上で動かせる画像（飾りの手順で選んでいて、いま映っているもの） */
-  const handleImage =
-    step === 'decorate' && selectedImage && !playback.playing && imagesAt(shownProject, playback.time).some((i) => i.id === selectedImage)
-      ? shownProject.images.find((i) => i.id === selectedImage) ?? null
-      : null;
+  const joinMarks = useMemo(() => {
+    const starts = clipStarts(project);
+    const index = new Map(project.clips.map((c, i) => [c.id, i]));
+    return activeJoinFades(project).flatMap((id) => (index.has(id) ? [starts[index.get(id)!]] : []));
+  }, [project.clips, project.joinFades]);
+  /** プレビューの上で動かせるもの（飾りの手順で選んでいて、いま映っているもの） */
+  const handle = step === 'decorate' && selected && !playback.playing ? boxHandleFor(project, boxDraft, selected, playback.time) : null;
   const stepIndex = STEPS.findIndex((s) => s.id === step);
 
   return (
@@ -910,16 +1023,15 @@ export function App() {
         <section class="stage" aria-label="プレビュー">
           <div class="preview-box" ref={boxRef}>
             <canvas ref={canvasRef} onClick={() => playerRef.current?.toggle()} title="押すと再生・一時停止（スペース）" />
-            {handleImage && boxRef.current && (
-              <ImageHandles
-                image={handleImage}
-                asset={project.assets.find((a) => a.id === handleImage.assetId)}
-                box={boxRef.current}
+            {handle && selected && boxRef.current && (
+              <BoxHandles
+                {...handle}
+                container={boxRef.current}
                 frameAspect={FRAME_ASPECT}
-                onDraft={(rect) => setImageDraft({ id: handleImage.id, rect })}
-                onCommit={(rect) => {
-                  setImageDraft(null);
-                  apply(moveImage(projectRef.current, handleImage.id, rect));
+                onDraft={(box) => setBoxDraft({ ...selected, box })}
+                onCommit={(box) => {
+                  setBoxDraft(null);
+                  apply(moveBox(projectRef.current, selected, box));
                 }}
               />
             )}
@@ -1018,27 +1130,43 @@ export function App() {
         ) : step === 'decorate' ? (
           <DecoratePanel
             project={project}
-            items={timelineImages}
-            selectedId={selectedImage}
+            tab={decorateTab}
+            selected={selected}
             selection={selection}
+            images={timelineImages}
+            shapes={timelineShapes.map((g) => ({ ...g, name: shapeName(g.kind) }))}
+            zooms={timelineZooms.map((z) => ({ ...z, name: `${z.factor.toFixed(1)}倍の拡大` }))}
             join={nearestJoin(project, playback.time)}
-            onAddImage={addImageFile}
-            onSelect={(id) => {
-              setSelectedImage(id);
-              const piece = timelineImages.find((x) => x.id === id);
-              if (piece && !(playback.time >= piece.from && playback.time < piece.to)) playerRef.current?.seek(piece.from);
+            speed={speedAt(project, playback.time)}
+            onTab={(tab) => {
+              setDecorateTab(tab);
+              if (selected && selected.kind !== tab) setSelected(null);
             }}
-            onPlace={(id, place) => apply(setImagePlace(projectRef.current, id, place, FRAME_ASPECT))}
-            onUseSelection={(id) => {
+            onSelect={selectItem}
+            onAddImage={addImageFile}
+            onImagePlace={(id, place) => apply(setImagePlace(projectRef.current, id, place, FRAME_ASPECT))}
+            onAddShape={addShapeAt}
+            onShapeStyle={(id, style) => apply(setShapeStyle(projectRef.current, id, style))}
+            onShapePlace={(id, place) => apply(placeShape(projectRef.current, id, place, FRAME_ASPECT))}
+            onAddZoom={addZoomAt}
+            onZoomFactor={(id, f) => apply(setZoomFactor(projectRef.current, id, f))}
+            onUseSelection={(target) => {
               if (!selection) return;
-              apply(setImageTime(projectRef.current, id, selection[0], selection[1]));
+              const set = target.kind === 'image' ? setImageTime : target.kind === 'shape' ? setShapeTime : setZoomTime;
+              apply(set(projectRef.current, target.id, selection[0], selection[1]));
               setSelection(null);
             }}
-            onRemove={(id) => {
-              apply(removeImage(projectRef.current, id));
-              if (selectedImage === id) setSelectedImage(null);
+            onRemove={removeSelected}
+            onSpeed={(speed) => {
+              if (!selection) return;
+              const next = setSpeed(projectRef.current, selection[0], selection[1], speed);
+              setSelection(null);
+              if (next !== projectRef.current) {
+                apply(next);
+                playerRef.current?.seek(selection[0]);
+                setNotice({ kind: 'info', text: speed === 1 ? 'なぞった範囲を元の速さに戻しました。' : `なぞった範囲を${speed}倍の速さにしました。` });
+              }
             }}
-            onSeek={(t) => playerRef.current?.seek(t)}
             onToggleJoin={(clipId) => apply(toggleJoinFade(projectRef.current, clipId))}
             onFadeSourceChanges={() => {
               const r = fadeSourceChanges(projectRef.current);
@@ -1122,18 +1250,25 @@ export function App() {
           onToggleMark={step === 'silence' ? toggleKept : undefined}
           lanes={lanes}
           onLaneItemClick={(lane, id, t) => {
-            if (lane === 'images') {
-              setSelectedImage(id);
-              if (step !== 'decorate') goStep('decorate');
-            }
             playerRef.current?.seek(t);
+            if (lane === 'images' || lane === 'shapes' || lane === 'zooms') {
+              if (step !== 'decorate') goStep('decorate');
+              const kind = lane === 'images' ? 'image' : lane === 'shapes' ? 'shape' : 'zoom';
+              setSelected({ kind, id });
+              setDecorateTab(kind);
+            }
           }}
-          onLaneItemResize={(lane, item, from, to) => (lane === 'images' ? resizeImage(item, from, to) : resizeSubtitle(item, from, to))}
-          joinMarks={activeJoinFades(project).flatMap((id) => {
-            const i = project.clips.findIndex((c) => c.id === id);
-            return i < 0 ? [] : [project.clips.slice(0, i).reduce((t, c) => t + (c.end - c.start), 0)];
-          })}
-          selectionAction={step === 'decorate' ? { label: 'ここに画像を置く', icon: 'image', onClick: addImageFile } : undefined}
+          onLaneItemResize={(lane, item, from, to) => (lane === 'subtitles' ? resizeSubtitle(item, from, to) : resizeRanged(lane, item, from, to))}
+          joinMarks={joinMarks}
+          selectionAction={
+            step !== 'decorate'
+              ? undefined
+              : decorateTab === 'image'
+                ? { label: 'ここに画像を置く', icon: 'image', onClick: addImageFile }
+                : decorateTab === 'zoom'
+                  ? { label: 'ここを拡大する', icon: 'plus', onClick: addZoomAt }
+                  : undefined
+          }
           missing={missingSet}
           disabled={exporting}
           control={timelineControl}

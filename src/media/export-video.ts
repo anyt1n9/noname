@@ -2,9 +2,9 @@
 import { VideoSample, VideoSampleSink, type InputVideoTrack, type VideoSampleSource } from 'mediabunny';
 import type { ExportPlan } from '../core/export-plan';
 import { FrameScheduler } from '../core/frames';
-import type { Project } from '../core/project';
+import { clipSpeed, type Project } from '../core/project';
 import { clipLength } from '../core/timeline';
-import { drawOverlays, hasOverlays, prepareOverlays } from './compose';
+import { applyZoom, drawOverlays, hasOverlays, prepareOverlays, resetZoom } from './compose';
 
 export interface VideoContextForExport {
   project: Project;
@@ -37,7 +37,9 @@ export async function writeVideo(ctx: VideoContextForExport): Promise<void> {
         await prepareOverlays(ctx.project, t);
         g.fillStyle = '#000';
         g.fillRect(0, 0, plan.width, plan.height);
+        applyZoom(g, ctx.project, t, plan.width, plan.height);
         sample.drawWithFit(g, { fit: 'contain' });
+        resetZoom(g);
         drawOverlays(g, ctx.project, t, plan.width, plan.height);
         const frame = new VideoSample(canvas, { timestamp: t, duration: frameDuration });
         await source.add(frame);
@@ -56,13 +58,14 @@ export async function writeVideo(ctx: VideoContextForExport): Promise<void> {
   for (const clip of ctx.project.clips) {
     const video = ctx.videos.get(clip.sourceId)!;
     const length = clipLength(clip);
+    const speed = clipSpeed(clip);
     const outEnd = outStart + length;
     let held: VideoSample | null = null;
     let heldFrom = outStart;
     const sink = new VideoSampleSink(video);
     for await (const sample of sink.samples(clip.start, clip.end)) {
       checkCanceled();
-      const at = outStart + (sample.timestamp - clip.start);
+      const at = outStart + (sample.timestamp - clip.start) / speed;
       if (held) {
         // 前のコマを、次のコマが始まるところまで見せる
         await emit(held, heldFrom, Math.min(at, outEnd));
