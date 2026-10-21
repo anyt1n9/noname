@@ -184,6 +184,7 @@ export function readProject(value: unknown): Project | null {
     endFade: value.endFade === true,
     publish: readPublish(value.publish),
     thumbnail: readThumbnail(value.thumbnail, ids),
+    practice: value.practice === true,
     nextId: value.nextId,
   };
 }

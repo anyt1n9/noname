@@ -37,6 +37,7 @@ import { newThumbnail, setThumbnailFrame, thumbnailFrameOnTimeline, type Thumbna
 import { importSrt, parseSrt, toSrt } from '../core/srt';
 import {
   addSubtitleAt,
+  addSubtitles,
   cutSubtitle,
   mergeWithNext,
   removeSubtitle,
@@ -80,6 +81,8 @@ import { errorText, probeFile } from '../media/probe';
 import { PREVIEW_HEIGHT, PREVIEW_WIDTH, SourceRegistry } from '../media/registry';
 import { measureSourceNoise } from '../media/noise';
 import { forgetThumbnailFrames, renderThumbnail } from '../media/thumbnail';
+import { sampleRecording } from '../media/sample';
+import { sampleSubtitles } from '../core/sample';
 import { assetMusic, builtinMusic, effectBuffer } from '../media/sounds';
 import { loadWork, saveWork } from '../media/storage';
 import { AudioDialog, LISTEN_SECONDS } from './AudioDialog';
@@ -89,6 +92,8 @@ import { AiDialog } from './AiDialog';
 import { DecoratePanel, type DecorateTab, type Selected } from './DecoratePanel';
 import { PublishPanel, type PublishTab } from './PublishPanel';
 import { ThumbnailPreview } from './ThumbnailPreview';
+import { PracticeTip } from './PracticeTip';
+import { PrivacyDialog } from './PrivacyDialog';
 import { TypoDialog } from './TypoDialog';
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
@@ -197,6 +202,7 @@ export function App() {
   /** AI のお手伝い（v0.8） */
   const [showAi, setShowAi] = useState(false);
   const [showTypos, setShowTypos] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const [publishTab, setPublishTab] = useState<PublishTab>('title');
   /** サムネイル（v0.9）：場面を選んでいる途中か・最後に文字を直した時刻（続けて打った分は1回の変更にまとめる） */
   const [thumbPicking, setThumbPicking] = useState(false);
@@ -690,6 +696,36 @@ export function App() {
     }
   };
 
+  /** 見本の録画で練習する（v1.0）。いまの作品は閉じる */
+  const startPractice = async () => {
+    if (exporting) return;
+    if (projectRef.current.sources.length > 0 && !confirm('見本の録画で練習しますか？ いまの作品は閉じます（ファイルに保存しておけば、あとで開けます）。')) return;
+    setShowAbout(false);
+    let sample: { file: File; handle: FileSystemFileHandle };
+    try {
+      setBusy('見本の録画を用意しています…');
+      sample = await sampleRecording((p) => setBusy(`見本の録画を作っています… ${Math.floor(p * 100)}%（はじめての時だけ）`));
+    } catch (e) {
+      setBusy(null);
+      setNotice({ kind: 'error', text: `見本の録画を作れませんでした（${errorText(e)}）` });
+      return;
+    }
+    setBusy(null);
+    registry.clear();
+    void forgetAssetsExcept(new Set());
+    const fresh = { ...emptyProject(), practice: true };
+    projectRef.current = fresh;
+    setHistory(createHistory(fresh));
+    setHandles({});
+    setOpenIds([]);
+    setPermissionIds([]);
+    setSelection(null);
+    setSelected(null);
+    setStep('import');
+    await addRecordings([sample]);
+    setHistory((h) => ({ ...h, present: { ...h.present, practice: true, name: '練習' } }));
+  };
+
   const newProject = () => {
     if (exporting) return;
     if (projectRef.current.sources.length > 0 && !confirm('新しい作品を作りますか？ いまの作品は消えます（ファイルに保存しておけば、あとで開けます）。')) {
@@ -990,7 +1026,7 @@ export function App() {
   // キーボード操作
   const keyHandler = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyHandler.current = (e: KeyboardEvent) => {
-    if (showKeys || showAbout || audioFor || showAi || showTypos) return;
+    if (showKeys || showAbout || audioFor || showAi || showTypos || showPrivacy) return;
     const action = actionForKey(e, isTyping(e.target));
     if (!action) return;
     const player = playerRef.current;
@@ -1182,6 +1218,10 @@ export function App() {
           </div>
         </section>
 
+        <div class="side">
+        {project.practice && project.clips.length > 0 && (
+          <PracticeTip step={step} onStop={() => setHistory((h) => ({ ...h, present: { ...h.present, practice: false } }))} />
+        )}
         {step === 'silence' ? (
           <SilencePanel
             tab={silenceTab}
@@ -1269,6 +1309,15 @@ export function App() {
             onExportSrt={exportSrt}
             onImportSrt={importSrtFile}
             onFixTypos={() => setShowTypos(true)}
+            onPracticeSubtitles={
+              project.practice && project.sources[0]
+                ? () => {
+                    const p = projectRef.current;
+                    apply(addSubtitles(p, p.sources[0].id, sampleSubtitles()));
+                    setNotice({ kind: 'info', text: '見本の字幕を入れました。まちがいが2か所あるので、行を押して直してみましょう。' });
+                  }
+                : undefined
+            }
             onNext={() => goStep('decorate')}
           />
         ) : step === 'decorate' ? (
@@ -1441,8 +1490,10 @@ export function App() {
             onNext={() => goStep('silence')}
             nextLabel="次へ：「間」を切る"
             onAudioSettings={setAudioFor}
+            onPractice={startPractice}
           />
         )}
+        </div>
       </main>
 
       <section class="timeline-area" aria-label="タイムライン">
@@ -1509,7 +1560,17 @@ export function App() {
 
       {notice && <Toast notice={notice} onClose={() => setNotice(null)} />}
       {showKeys && <KeysDialog onClose={() => setShowKeys(false)} />}
-      {showAbout && <AboutDialog onClose={() => setShowAbout(false)} />}
+      {showAbout && (
+        <AboutDialog
+          onClose={() => setShowAbout(false)}
+          onPractice={() => void startPractice()}
+          onPrivacy={() => {
+            setShowAbout(false);
+            setShowPrivacy(true);
+          }}
+        />
+      )}
+      {showPrivacy && <PrivacyDialog onClose={() => setShowPrivacy(false)} />}
       {showAi && <AiDialog topic={project.publish.title || project.name} onClose={() => setShowAi(false)} />}
       {showTypos && (
         <TypoDialog

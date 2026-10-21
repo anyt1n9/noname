@@ -197,6 +197,8 @@ export interface Project {
   publish: PublishInfo;
   /** サムネイル（v0.9）。まだ作っていなければ null */
   thumbnail: ThumbnailSetting | null;
+  /** 見本の録画で練習している作品か（v1.0）。手順ごとに練習の案内を出す */
+  practice: boolean;
   /** 次に使う番号（ID を作るため） */
   nextId: number;
 }
@@ -221,6 +223,7 @@ export function emptyProject(): Project {
     endFade: false,
     publish: { title: '', description: '', chapters: [] },
     thumbnail: null,
+    practice: false,
     nextId: 1,
   };
 }

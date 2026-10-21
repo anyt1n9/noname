@@ -40,7 +40,7 @@ export function KeysDialog({ onClose }: { onClose(): void }) {
   );
 }
 
-export function AboutDialog({ onClose }: { onClose(): void }) {
+export function AboutDialog({ onClose, onPractice, onPrivacy }: { onClose(): void; onPractice(): void; onPrivacy(): void }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -97,6 +97,12 @@ export function AboutDialog({ onClose }: { onClose(): void }) {
         <div class="actions">
           <button class="btn primary" onClick={onClose} autoFocus>
             閉じる
+          </button>
+          <button class="btn" onClick={onPrivacy}>
+            外部に送る情報の一覧
+          </button>
+          <button class="btn" onClick={onPractice}>
+            見本の録画で練習する
           </button>
         </div>
       </div>

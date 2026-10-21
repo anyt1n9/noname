@@ -20,6 +20,8 @@ interface Props {
   onNext(): void;
   nextLabel: string;
   onAudioSettings(sourceId: string): void;
+  /** 見本の録画で練習する（v1.0） */
+  onPractice(): void;
 }
 
 export function GuidePanel(p: Props) {
@@ -44,10 +46,16 @@ export function GuidePanel(p: Props) {
             </button>
           </>
         ) : !hasClips ? (
-          <button class="btn primary big" onClick={p.onPick}>
-            <Icon name="film" />
-            録画を選ぶ
-          </button>
+          <>
+            <button class="btn primary big" onClick={p.onPick}>
+              <Icon name="film" />
+              録画を選ぶ
+            </button>
+            <button class="btn" onClick={p.onPractice} title="テロッパで作った見本の録画で、1本作る練習をする">
+              <Icon name="play" />
+              見本の録画で練習する
+            </button>
+          </>
         ) : p.hasSelection ? (
           <>
             <button class="btn primary big" onClick={p.onDelete} title="なぞった範囲を消す（Delete）">
@@ -106,7 +114,10 @@ export function GuidePanel(p: Props) {
         </p>
       )}
       {!hasClips && (
-        <p class="note">録画はこのパソコンの中だけで使います。インターネットには送りません。</p>
+        <>
+          <p class="note">録画はこのパソコンの中だけで使います。インターネットには送りません。</p>
+          <p class="hint-text">初めての人は「見本の録画で練習する」がおすすめです。見本はテロッパが作る短い録画（約45秒）で、読み込みから書き出しまでを試せます。とばしてもかまいません。</p>
+        </>
       )}
     </div>
   );

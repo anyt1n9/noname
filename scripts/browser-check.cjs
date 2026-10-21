@@ -705,6 +705,38 @@ async function main() {
   await page.getByRole('button', { name: 'この場面にする' }).click();
   await page.waitForSelector('canvas.thumbnail-preview');
 
+  // 外部に送る情報の一覧（v1.0）
+  await page.getByRole('button', { name: 'このソフトについて' }).click();
+  await page.getByRole('button', { name: '外部に送る情報の一覧' }).click();
+  const external = page.getByRole('dialog', { name: '外部に送る情報の一覧' });
+  check('外部に送る情報の一覧に、送る場面・送り先・目的を出す', (await external.locator('.external-item').count()) === 4 && (await external.innerText()).includes('Hugging Face'));
+  await page.screenshot({ path: path.join(OUT, '28-external.png') });
+  await external.getByRole('button', { name: '閉じる' }).click();
+
+  // 見本の録画で練習する（v1.0）
+  await page.getByRole('button', { name: '新しく' }).click();
+  await page.getByRole('button', { name: '見本の録画で練習する' }).click();
+  await page.waitForSelector('.practice-tip', { timeout: 240000 });
+  const sampleLength = await timeText(page);
+  check('見本の録画を作って読み込める', sampleLength.endsWith('0:46.0') && (await page.locator('.source-list li').innerText()).includes('teroppa-sample'), sampleLength);
+  check('練習の案内を出す', (await page.locator('.practice-tip').innerText()).includes('再生'));
+  await page.screenshot({ path: path.join(OUT, '29-practice.png') });
+  await goStep(page, '「間」を切る');
+  await page.getByRole('tab', { name: '「間」' }).click();
+  await page.waitForSelector('text=か所見つけました', { timeout: 120000 });
+  await page.getByRole('button', { name: 'まとめて切る' }).click();
+  await page.waitForSelector('text=「間」を切りました');
+  check('見本の「間」を切れる', sec(await timeText(page)) < 42, await timeText(page));
+  await goStep(page, '字幕');
+  await page.getByRole('button', { name: '見本の字幕を入れる（練習用）' }).click();
+  await page.waitForSelector('.sub-row');
+  check('見本の字幕を入れられる', (await page.locator('.sub-row').count()) === 9);
+  const practiceOut = await exportTo(page, 'practice.mp4');
+  check('練習の動画を書き出せる', Number(practiceOut.format.duration) > 30, `${practiceOut.format.duration}秒`);
+  execSync(`ffmpeg -v error -y -ss 27 -i ${path.join(OUT, 'practice.mp4')} -frames:v 1 ${path.join(OUT, '30-practice-frame.png')}`);
+  await page.getByRole('button', { name: '練習をやめる' }).click();
+  check('練習をやめられる', (await page.locator('.practice-tip').count()) === 0);
+
   // 明るい画面・狭い画面
   await goStep(page, '書き出し');
   await page.getByRole('button', { name: /編集に戻る/ }).click();

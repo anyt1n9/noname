@@ -81,3 +81,11 @@ describe('時間の表示', () => {
     expect(formatBytes(10)).toBe('1KB');
   });
 });
+
+describe('版の番号の表示', () => {
+  it('短い版の番号（候補の版は印を付ける）', async () => {
+    const { shortVersion } = await import('../src/version');
+    expect(shortVersion('0.9.0')).toBe('v0.9');
+    expect(shortVersion('1.0.0-rc.1')).toBe('v1.0-rc.1');
+  });
+});

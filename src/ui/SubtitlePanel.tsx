@@ -50,6 +50,8 @@ interface Props {
   onImportSrt(): void;
   /** AI で誤字を直す（v0.8） */
   onFixTypos(): void;
+  /** 練習用：見本の字幕を入れる（v1.0。練習のときだけ） */
+  onPracticeSubtitles?: () => void;
   onNext(): void;
 }
 
@@ -257,7 +259,12 @@ export function SubtitlePanel(p: Props) {
           </div>
           {!p.analysisReady && <p class="note">録画の音を調べています… {Math.floor(p.analysisProgress * 100)}%（終わると、しゃべっている部分だけを字幕にできます）</p>}
           <div class="actions">
-            <button class="btn primary big" onClick={p.onTranscribe} disabled={!p.analysisReady}>
+            {p.onPracticeSubtitles && (
+              <button class="btn primary big" onClick={p.onPracticeSubtitles} title="練習用に用意した字幕を入れる">
+                見本の字幕を入れる（練習用）
+              </button>
+            )}
+            <button class={`btn ${p.onPracticeSubtitles ? '' : 'primary big'}`} onClick={p.onTranscribe} disabled={!p.analysisReady}>
               自動で字幕を作る
             </button>
             <button class="btn" onClick={p.onImportSrt} title="ほかのソフトで作った字幕ファイルを使う">

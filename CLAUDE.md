@@ -2,7 +2,7 @@
 
 ブラウザで使う、YouTube の解説動画・ゲーム実況向けの動画編集ソフト。**仕様は `docs/spec.md` にある。作業の前に必ず読むこと。**
 
-- 現在の版：**v0.9.0**（v0.8 に加えて、サムネイル作成）。次に作る範囲は `docs/spec.md` の「19. 開発の順番」の v1.0（見本の録画で練習・仕上げ・公開の準備）。ユーザーの依頼で v1.0 まで順に作っている。
+- 現在の版：**v1.0.0-rc.1**（v0.9 に加えて、見本の録画で練習・外部に送る情報の一覧・公開の準備の資料）。v1.0 のうち、ソースコードのライセンス・正式な名前・公開場所は作者（ユーザー）が決める（`docs/release.md`）。決まったら 1.0.0 にする。
 - 版の番号は `package.json` の `version` だけで管理する（画面には `src/version.ts` から出る）。
 - ユーザーはプログラミング初学者で、動画編集も未経験。説明は専門用語を避け、何ができるようになったかを中心に伝える。
 - ユーザーは、すべての利用規約と法律を守ることを求めている。提案も必ずそれを守った内容にする。
@@ -30,6 +30,7 @@
 | `tests/` | 自動テスト（Vitest） |
 | `scripts/browser-check.cjs` | ヘッドレス Chromium での画面の通しの確認 |
 | `docs/spec.md` | 仕様書 |
+| `docs/release.md` | 公開の準備（作者が決めること・本物のパソコンで確かめること） |
 | `public/` | そのまま公開される素材（BGM・フォント・ライセンス表記など） |
 
 ## 守るルール
@@ -68,17 +69,19 @@
 - 文章で編集は `cutSubtitle`（字幕の時間を `removeSourceRanges` で取り除き、字幕も消す）。
 - 字幕（`project.subtitles`）は録画の中の時刻で持ち、`subtitlesOnTimeline` でタイムラインの位置を計算する。分け方は `src/core/captions.ts`（Intl.Segmenter で言葉の区切りを調べる）。
 - 自動字幕は `src/ai/transcribe-worker.ts`（Transformers.js）で動かす。AI の部品は使う人が了承したときだけ huggingface.co から取る。ONNX Runtime の WebAssembly はテロッパの中のもの（`env.backends.onnx.wasm.wasmPaths`）を使い、CDN からは読まない。文字起こしの途中経過は1回目だけ元に戻す記録を作り、あとは置きかえる（元に戻すと、その回の字幕がまとめて消える）。
-- 字幕などを映像に重ねる処理は `src/media/compose.ts` にまとめ、プレビュー（`player.ts`）と書き出し（`export-video.ts`）で同じものを使う（画像 → 字幕 → フェードの黒の順に描く）。重ねるものがあるときだけ、書き出しはキャンバスに描き直す。
+- 字幕などを映像に重ねる処理は `src/media/compose.ts` にまとめ、プレビュー（`player.ts`）と書き出し（`export-video.ts`）で同じものを使う（画像 → 矢印や枠 → 字幕 → フェードの黒の順に描く）。重ねるものがあるときだけ、書き出しはキャンバスに描き直す。
 - 画像（`project.images`）は字幕と同じく録画の中の時刻（`ranges`）で持つ。位置は画面に対する割合（真ん中の x・y と幅 w）。画像・曲の中身は `project.assets`（情報だけ）とは別に、中身の SHA-256 を ID にして IndexedDB に保存し（`src/media/assets.ts`）、作品ファイルには `assetData`（base64）として入れる。
 - 効果音（`project.effects`）は録画の中の時刻の点。音は `src/core/sfx.ts` で作る（48kHz）。
 - BGM（`project.bgm`）は完成した動画の0秒からくり返す。大きさは `src/core/bgm.ts`（始まり・終わりのフェードと、しゃべっている間に小さくする）。しゃべっている範囲は画面側で声の大きさから計算し（`speechOnTimeline`）、書き出しの作業場所にも渡す。プレビューは入っている曲を `sound-worker.ts` で作って AudioBuffer にし、大きさの変化は少しずつ予約する。書き出しは、入っている曲は作業場所の中で作り、自分の曲は `LoopTrack` で少しずつ読みながらくり返す。
-- 速さ（v0.6）は `clip.speed`（ないときは 1）。タイムラインの長さは `clipLength`＝(end − start) ÷ speed で、時刻の変換（`locate`・`sourceRangeOnTimeline`・`timelineToSource`・`rangesOnTimeline`）はすべて速さを入れて計算する。録画の時刻を直接足し引きしない。音は `TimeStretcher`（`src/core/stretch.ts`、WSOLA）で声の高さを変えずに速さを変える（書き出しは `StretchReader`、プレビューは `scheduleStretched`）。
+- 速さ（v0.6）は `clip.speed`（ないときは 1）。タイムラインの長さは `clipLength`＝(end − start) ÷ speed で、時刻の変換（`locate`・`sourceRangeOnTimeline`・`timelineToSource`・`rangesOnTimeline`）はすべて速さを入れて計算する。録画の時刻を直接足し引きしない。音は `TimeStretcher`（`src/core/stretch.ts`、WSOLA）で声の高さを変えずに速さを変える（書き出しは `ProcessReader`、プレビューは `scheduleProcessed`）。
 - 画像・矢印や枠（`project.shapes`）・拡大（`project.zooms`）は、どれも録画の中の時刻の `ranges` を持つ（共通の計算は `src/core/ranged.ts`）。拡大は映像を描く前に `applyZoom` で描く位置を変える（字幕などは拡大しない）。プレビューの上で動かす枠は `src/ui/BoxHandles.tsx`。
 - 声の仕上げ（v0.7）：声の大きさは `normalizeVoices`（`src/core/finish.ts`）で `voiceGain` に入れる。雑音を減らす設定は `audio.denoise`（強さと、静かな部分から調べた雑音の音色）。書き出しの音は、かたまりごとに TrackReader →（声なら）NoiseReducer →（速さを変えたら）TimeStretcher の順に通す（`ProcessReader`）。混ぜたあとは `Limiter` を、かたまりを1つ遅らせて通す。プレビューは同じ加工を `scheduleProcessed` で行い、最後にブラウザのコンプレッサーで抑える。
 - 口ぐせの候補（`src/core/fillers.ts`）は、字幕の文字と、音の特徴（のばした声）から出す。試験的なので、画面でもそう書く。
 - AI のお手伝い（v0.8）：質問文と答えの読み方は `src/core/prompts.ts`、チャプターのルールは `src/core/chapters.ts`（YouTube：0:00 から・3つ以上・時刻の順・10秒以上）。「AIに聞く」（`src/ui/AskAi.tsx`）は質問文をコピーしてサイトのトップを開くだけ。パソコンの中の AI は `src/ai/builtin.ts`（Prompt API）で、`useBuiltinAi` が案内（Google の禁止事項ポリシー）・ダウンロード・やめるをまとめる。タイトル・概要欄・チャプターは `project.publish` に保存する。
 - 画面の通しの確認では、`window.open` とクリップボードを差し替え、Prompt API は決まった答えを返す「まねした AI」を入れて確かめている。
 - サムネイル（v0.9）は `project.thumbnail`（場面は録画の中の時刻、文字・テンプレートなど。`src/core/thumbnail.ts`）。描き方は `src/media/thumbnail.ts` の `drawThumbnail` で、プレビュー（`ThumbnailPreview`）と保存で同じものを使う。場面の映像は、保存する大きさの CanvasSink（cover）で読む。
+- 練習（v1.0）：見本の録画は `src/core/sample.ts`（声のような音・練習用の字幕）と `src/media/sample-worker.ts`（ゲームのような絵を描いて MP4 に書く）で作り、OPFS の `teroppa-sample-v1.mp4` に残す（作りを変えたら名前の番号を上げる）。練習中の作品は `project.practice` が true で、手順ごとの案内（`src/data/practice.ts`）を出す。
+- 外部に送る情報の一覧は `src/data/external.ts`（画面は `PrivacyDialog`）。外部と通信する処理を足したら、ここと `docs/spec.md` の 20.6 を一緒に直す。
 - つなぎ目のフェード（`project.joinFades`：つなぎ目の後ろのかたまりの ID、`endFade`）は `src/core/fades.ts`。かたまりを切り分けると前の部分が ID を引き継ぐので、フェードはつなぎ目に残る。フェードは録画の音だけにかけ、BGM・効果音にはかけない。
 - 字幕のフォントは Noto Sans JP（`@fontsource/noto-sans-jp`）を FontFace で登録し、使う文字の分だけ読み込む（`src/media/caption-font.ts`）。
 - `.npmrc` で部品のインストールスクリプトを止めている（transformers.js が連れてくる onnxruntime-node は、ブラウザでは使わないうえ、インストール時に外部から追加のファイルを取ろうとするため）。

@@ -675,6 +675,9 @@ button {
   padding: 22px;
   min-width: 360px;
   max-width: 560px;
+  /* 画面に収まらないときはスクロールする（下のボタンに届くように） */
+  max-height: calc(100vh - 40px);
+  overflow: auto;
   box-shadow: var(--shadow);
 }
 
@@ -1489,4 +1492,60 @@ kbd {
   .toast {
     top: 106px;
   }
+}
+
+/* 練習の案内（v1.0） */
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.side > .guide {
+  flex: 1;
+}
+
+.practice-tip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  font-size: 13px;
+  line-height: 1.6;
+  flex: none;
+}
+
+.practice-tip strong {
+  color: var(--accent-ink);
+}
+
+.practice-tip span {
+  flex: 1 1 200px;
+}
+
+/* 外部に送る情報の一覧（v1.0） */
+.external-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.external-item {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.external-item h3 {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.external-item .facts {
+  font-size: 13px;
 }
