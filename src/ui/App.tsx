@@ -33,6 +33,7 @@ import {
 import { parseProject, PROJECT_FILE_EXTENSION, serializeProject } from '../core/project-file';
 import { applyCandidates, candidateOnTimeline, candidatesLength, findCandidates, type VoiceLevel } from '../core/silence';
 import { breakLines } from '../core/captions';
+import { newThumbnail, setThumbnailFrame, thumbnailFrameOnTimeline, type ThumbnailSetting } from '../core/thumbnail';
 import { importSrt, parseSrt, toSrt } from '../core/srt';
 import {
   addSubtitleAt,
@@ -66,6 +67,7 @@ import {
   isRecordingFileName,
   openTextFile,
   pickRecordings,
+  saveBlobFile,
   saveTextFile,
   SRT_FILE_KIND,
   type PickedFile,
@@ -77,6 +79,7 @@ import { Player, type PlayerState } from '../media/player';
 import { errorText, probeFile } from '../media/probe';
 import { PREVIEW_HEIGHT, PREVIEW_WIDTH, SourceRegistry } from '../media/registry';
 import { measureSourceNoise } from '../media/noise';
+import { forgetThumbnailFrames, renderThumbnail } from '../media/thumbnail';
 import { assetMusic, builtinMusic, effectBuffer } from '../media/sounds';
 import { loadWork, saveWork } from '../media/storage';
 import { AudioDialog, LISTEN_SECONDS } from './AudioDialog';
@@ -85,6 +88,7 @@ import { BoxHandles, type Box } from './BoxHandles';
 import { AiDialog } from './AiDialog';
 import { DecoratePanel, type DecorateTab, type Selected } from './DecoratePanel';
 import { PublishPanel, type PublishTab } from './PublishPanel';
+import { ThumbnailPreview } from './ThumbnailPreview';
 import { TypoDialog } from './TypoDialog';
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
@@ -194,6 +198,9 @@ export function App() {
   const [showAi, setShowAi] = useState(false);
   const [showTypos, setShowTypos] = useState(false);
   const [publishTab, setPublishTab] = useState<PublishTab>('title');
+  /** サムネイル（v0.9）：場面を選んでいる途中か・最後に文字を直した時刻（続けて打った分は1回の変更にまとめる） */
+  const [thumbPicking, setThumbPicking] = useState(false);
+  const lastThumbText = useRef(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
@@ -418,6 +425,7 @@ export function App() {
 
   useEffect(() => {
     playerRef.current?.reload();
+    forgetThumbnailFrames();
   }, [openIds]);
 
   // 自動保存した作品を読み込む
@@ -738,6 +746,7 @@ export function App() {
     setPendingCut(null);
     stopPreview();
     if (id !== 'decorate') setSelected(null);
+    setThumbPicking(false);
     if (id === 'export') return goExport();
     if (id !== 'import' && (project.clips.length === 0 || missing.length > 0)) return;
     setSelection(null);
@@ -1133,6 +1142,9 @@ export function App() {
         <section class="stage" aria-label="プレビュー">
           <div class="preview-box" ref={boxRef}>
             <canvas ref={canvasRef} onClick={() => playerRef.current?.toggle()} title="押すと再生・一時停止（スペース）" />
+            {step === 'publish' && publishTab === 'thumbnail' && project.thumbnail && !thumbPicking && missing.length === 0 && (
+              <ThumbnailPreview setting={project.thumbnail} registry={registry} />
+            )}
             {handle && selected && boxRef.current && (
               <BoxHandles
                 {...handle}
@@ -1369,6 +1381,50 @@ export function App() {
             onChange={(publish) => apply({ ...projectRef.current, publish })}
             onSeek={(t) => playerRef.current?.seek(t)}
             notify={(text) => setNotice({ kind: 'info', text })}
+            thumbnail={{
+              picking: thumbPicking,
+              onCreate: () => {
+                const t = newThumbnail(projectRef.current, playerRef.current?.currentTime() ?? 0);
+                if (t) apply({ ...projectRef.current, thumbnail: t });
+              },
+              onChange: (setting: ThumbnailSetting) => {
+                const p = projectRef.current;
+                const textOnly = p.thumbnail !== null && JSON.stringify({ ...p.thumbnail, text: '' }) === JSON.stringify({ ...setting, text: '' });
+                const now = Date.now();
+                const next = { ...p, thumbnail: setting };
+                // 文字を続けて打った分は、1回の変更にまとめる（元に戻すと、打つ前に戻る）
+                if (textOnly && now - lastThumbText.current < 1500) setHistory((h) => ({ ...h, present: next }));
+                else apply(next);
+                lastThumbText.current = textOnly ? now : 0;
+              },
+              onPick: (on: boolean) => {
+                setThumbPicking(on);
+                const p = projectRef.current;
+                const at = on && p.thumbnail ? thumbnailFrameOnTimeline(p, p.thumbnail) : null;
+                if (at !== null) playerRef.current?.seek(at);
+              },
+              onUseFrame: () => {
+                const p = projectRef.current;
+                if (p.thumbnail) apply({ ...p, thumbnail: setThumbnailFrame(p.thumbnail, p, playerRef.current?.currentTime() ?? 0) });
+                setThumbPicking(false);
+              },
+              onSave: async (width: number, height: number, type: 'image/png' | 'image/jpeg') => {
+                const p = projectRef.current;
+                if (!p.thumbnail) return null;
+                try {
+                  setBusy('サムネイルを作っています…');
+                  const blob = await renderThumbnail(registry, p.thumbnail, width, height, type);
+                  setBusy(null);
+                  const ext = type === 'image/png' ? '.png' : '.jpg';
+                  const ok = await saveBlobFile(`${p.name || '動画'}-サムネイル${ext}`, blob, type === 'image/png' ? 'PNG 画像' : 'JPEG 画像', ext);
+                  return ok ? blob.size : null;
+                } catch (e) {
+                  setBusy(null);
+                  setNotice({ kind: 'error', text: `サムネイルを保存できませんでした（${errorText(e)}）` });
+                  return null;
+                }
+              },
+            }}
           />
         ) : (
           <GuidePanel

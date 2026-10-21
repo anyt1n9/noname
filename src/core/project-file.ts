@@ -10,6 +10,7 @@ import { DEFAULT_BGM_VOLUME, musicTrack } from '../data/music';
 import { isSoundId } from '../data/sfx';
 import { DENOISE_STRENGTHS, type DenoiseStrength } from '../data/voice';
 import { DENOISE_FRAME } from './denoise';
+import { readThumbnail } from './thumbnail';
 import { ARROW_DIRECTIONS, isShapeKind, SHAPE_COLORS, SHAPE_THICKNESS, type ArrowDirection, type ShapeThickness } from '../data/shapes';
 import {
   defaultAudio,
@@ -31,7 +32,7 @@ import {
 
 export const PROJECT_FILE_FORMAT = 'teroppa-project';
 /** 版の番号。新しい項目を足したら上げる（古い版のファイルも読めるようにしておく） */
-export const PROJECT_FILE_VERSION = 7;
+export const PROJECT_FILE_VERSION = 8;
 export const PROJECT_FILE_EXTENSION = '.teroppa';
 
 /** 画像・曲の中身（Asset の id → base64 の文字） */
@@ -182,6 +183,7 @@ export function readProject(value: unknown): Project | null {
     joinFades: [...new Set(joinFades)],
     endFade: value.endFade === true,
     publish: readPublish(value.publish),
+    thumbnail: readThumbnail(value.thumbnail, ids),
     nextId: value.nextId,
   };
 }

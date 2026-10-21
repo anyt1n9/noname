@@ -657,6 +657,54 @@ async function main() {
   check('台本の下書きの質問文を作る', scripted);
   await page.getByRole('button', { name: '閉じる' }).last().click();
 
+  // サムネイル（v0.9）
+  await goStep(page, '公開の準備');
+  await page.getByRole('tab', { name: 'サムネイル' }).click();
+  await page.getByRole('button', { name: 'いまの場面でサムネイルを作る' }).click();
+  await page.waitForSelector('canvas.thumbnail-preview');
+  check('サムネイルの文字は、タイトルから始まる', (await page.getByRole('textbox', { name: 'サムネイルの文字' }).inputValue()) === 'ボスの弱点を3分で解説');
+  await page.getByRole('textbox', { name: 'サムネイルの文字' }).fill('ボス戦\n攻略！');
+  await page.waitForTimeout(800);
+  const thumbPixels = (pred) =>
+    page.evaluate((src) => {
+      const f = new Function('r', 'g', 'b', `return ${src}`);
+      const c = document.querySelector('canvas.thumbnail-preview');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 16) if (f(d[i], d[i + 1], d[i + 2])) n++;
+      return n;
+    }, pred);
+  const yellow = await thumbPixels('r > 200 && g > 190 && b < 110');
+  check('サムネイルに大きな文字が載る（インパクト：黄色い文字）', yellow > 500, `${yellow}`);
+  await page.getByRole('radiogroup', { name: 'サムネイルの見た目' }).getByRole('radio', { name: 'ポップ' }).click();
+  await page.waitForTimeout(500);
+  const white = await thumbPixels('r > 240 && g > 240 && b > 240');
+  const reddish = await thumbPixels('r > 200 && g < 90 && b < 90');
+  check('見た目を変えられる（ポップ：白い文字に赤いふち）', white > 500 && reddish > 500, `白${white}・赤${reddish}`);
+  await page.screenshot({ path: path.join(OUT, '27-thumbnail.png') });
+  await page.evaluate(() => window.__saveNames.push('thumb.png'));
+  await page.getByRole('button', { name: 'サムネイルを保存' }).click();
+  await page.waitForSelector('text=保存しました');
+  const thumbFile = path.join(OUT, 'thumb.png');
+  fs.writeFileSync(thumbFile, await readOpfs(page, 'thumb.png'));
+  const thumbInfo = probe(thumbFile).streams[0];
+  check('サムネイルを PNG（1280×720）で保存できる', thumbInfo.codec_name === 'png' && thumbInfo.width === 1280 && thumbInfo.height === 720, `${thumbInfo.codec_name} ${thumbInfo.width}×${thumbInfo.height}`);
+  await page.getByRole('radiogroup', { name: 'サムネイルの大きさ' }).getByRole('radio', { name: /1920/ }).click();
+  await page.getByRole('radiogroup', { name: 'サムネイルの形式' }).getByRole('radio', { name: /JPEG/ }).click();
+  await page.evaluate(() => window.__saveNames.push('thumb.jpg'));
+  await page.getByRole('button', { name: 'サムネイルを保存' }).click();
+  await page.waitForTimeout(1500);
+  const jpgFile = path.join(OUT, 'thumb.jpg');
+  fs.writeFileSync(jpgFile, await readOpfs(page, 'thumb.jpg'));
+  const jpgInfo = probe(jpgFile).streams[0];
+  check('サムネイルを JPEG（1920×1080）でも保存できる', jpgInfo.codec_name === 'mjpeg' && jpgInfo.width === 1920, `${jpgInfo.codec_name} ${jpgInfo.width}×${jpgInfo.height}`);
+  // 場面を選び直す
+  await page.getByRole('button', { name: '場面を選び直す' }).click();
+  check('場面を選ぶ間は、サムネイルを隠して録画を見せる', (await page.locator('canvas.thumbnail-preview').count()) === 0);
+  await page.keyboard.press('ArrowRight');
+  await page.getByRole('button', { name: 'この場面にする' }).click();
+  await page.waitForSelector('canvas.thumbnail-preview');
+
   // 明るい画面・狭い画面
   await goStep(page, '書き出し');
   await page.getByRole('button', { name: /編集に戻る/ }).click();

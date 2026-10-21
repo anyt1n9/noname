@@ -2,7 +2,7 @@
 
 ブラウザで使う、YouTube の解説動画・ゲーム実況向けの動画編集ソフト。**仕様は `docs/spec.md` にある。作業の前に必ず読むこと。**
 
-- 現在の版：**v0.8.0**（v0.7 に加えて、AI のお手伝い：調べもの・台本・誤字直し・タイトルと概要欄・チャプター）。次に作る範囲は `docs/spec.md` の「19. 開発の順番」の v0.9（サムネイル）。ユーザーの依頼で v1.0 まで順に作っている。
+- 現在の版：**v0.9.0**（v0.8 に加えて、サムネイル作成）。次に作る範囲は `docs/spec.md` の「19. 開発の順番」の v1.0（見本の録画で練習・仕上げ・公開の準備）。ユーザーの依頼で v1.0 まで順に作っている。
 - 版の番号は `package.json` の `version` だけで管理する（画面には `src/version.ts` から出る）。
 - ユーザーはプログラミング初学者で、動画編集も未経験。説明は専門用語を避け、何ができるようになったかを中心に伝える。
 - ユーザーは、すべての利用規約と法律を守ることを求めている。提案も必ずそれを守った内容にする。
@@ -78,6 +78,7 @@
 - 口ぐせの候補（`src/core/fillers.ts`）は、字幕の文字と、音の特徴（のばした声）から出す。試験的なので、画面でもそう書く。
 - AI のお手伝い（v0.8）：質問文と答えの読み方は `src/core/prompts.ts`、チャプターのルールは `src/core/chapters.ts`（YouTube：0:00 から・3つ以上・時刻の順・10秒以上）。「AIに聞く」（`src/ui/AskAi.tsx`）は質問文をコピーしてサイトのトップを開くだけ。パソコンの中の AI は `src/ai/builtin.ts`（Prompt API）で、`useBuiltinAi` が案内（Google の禁止事項ポリシー）・ダウンロード・やめるをまとめる。タイトル・概要欄・チャプターは `project.publish` に保存する。
 - 画面の通しの確認では、`window.open` とクリップボードを差し替え、Prompt API は決まった答えを返す「まねした AI」を入れて確かめている。
+- サムネイル（v0.9）は `project.thumbnail`（場面は録画の中の時刻、文字・テンプレートなど。`src/core/thumbnail.ts`）。描き方は `src/media/thumbnail.ts` の `drawThumbnail` で、プレビュー（`ThumbnailPreview`）と保存で同じものを使う。場面の映像は、保存する大きさの CanvasSink（cover）で読む。
 - つなぎ目のフェード（`project.joinFades`：つなぎ目の後ろのかたまりの ID、`endFade`）は `src/core/fades.ts`。かたまりを切り分けると前の部分が ID を引き継ぐので、フェードはつなぎ目に残る。フェードは録画の音だけにかけ、BGM・効果音にはかけない。
 - 字幕のフォントは Noto Sans JP（`@fontsource/noto-sans-jp`）を FontFace で登録し、使う文字の分だけ読み込む（`src/media/caption-font.ts`）。
 - `.npmrc` で部品のインストールスクリプトを止めている（transformers.js が連れてくる onnxruntime-node は、ブラウザでは使わないうえ、インストール時に外部から追加のファイルを取ろうとするため）。

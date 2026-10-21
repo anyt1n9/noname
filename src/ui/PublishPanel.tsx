@@ -8,9 +8,10 @@ import { totalDuration } from '../core/timeline';
 import { AskAi, copyText } from './AskAi';
 import { AiProgress, BuiltinNotice } from './BuiltinAi';
 import { Icon } from './icons';
+import { ThumbnailTab } from './ThumbnailTab';
 import { useBuiltinAi } from './useBuiltinAi';
 
-export type PublishTab = 'title' | 'chapters';
+export type PublishTab = 'title' | 'chapters' | 'thumbnail';
 
 interface Props {
   project: Project;
@@ -20,6 +21,8 @@ interface Props {
   onChange(publish: PublishInfo): void;
   onSeek(t: number): void;
   notify(text: string): void;
+  /** サムネイル（v0.9） */
+  thumbnail: Omit<Parameters<typeof ThumbnailTab>[0], 'project'>;
 }
 
 /** 「1:02」「1:02:03」を秒に。読めなければ null */
@@ -34,7 +37,7 @@ export function PublishPanel(p: Props) {
   return (
     <div class="guide publish-panel" aria-live="polite">
       <h2>公開の準備をしましょう</h2>
-      <p>YouTube に上げるときの、タイトル・概要欄・チャプター（目次）の案を作ります。AI の案は、確かめてから使ってください。</p>
+      <p>YouTube に上げるときの、タイトル・概要欄・チャプター（目次）の案と、サムネイルを作ります。AI の案は、確かめてから使ってください。</p>
       <div class="tabs" role="tablist" aria-label="公開の準備">
         <button role="tab" aria-selected={p.tab === 'title'} class={p.tab === 'title' ? 'on' : ''} onClick={() => p.onTab('title')}>
           タイトル・概要欄
@@ -42,9 +45,18 @@ export function PublishPanel(p: Props) {
         <button role="tab" aria-selected={p.tab === 'chapters'} class={p.tab === 'chapters' ? 'on' : ''} onClick={() => p.onTab('chapters')}>
           チャプター
         </button>
+        <button role="tab" aria-selected={p.tab === 'thumbnail'} class={p.tab === 'thumbnail' ? 'on' : ''} onClick={() => p.onTab('thumbnail')}>
+          サムネイル
+        </button>
       </div>
-      {lines.length === 0 && <p class="note">字幕があると、AI が動画の内容から案を作れます。字幕がなくても、自分で書けます。</p>}
-      {p.tab === 'title' ? <TitleTab {...p} lines={lines} /> : <ChaptersTab {...p} lines={lines} duration={duration} />}
+      {lines.length === 0 && p.tab !== 'thumbnail' && <p class="note">字幕があると、AI が動画の内容から案を作れます。字幕がなくても、自分で書けます。</p>}
+      {p.tab === 'title' ? (
+        <TitleTab {...p} lines={lines} />
+      ) : p.tab === 'chapters' ? (
+        <ChaptersTab {...p} lines={lines} duration={duration} />
+      ) : (
+        <ThumbnailTab project={p.project} {...p.thumbnail} />
+      )}
     </div>
   );
 }

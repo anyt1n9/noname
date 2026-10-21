@@ -5,6 +5,7 @@ import type { ArrowDirection, ShapeKind, ShapeThickness } from '../data/shapes';
 import type { DenoiseStrength } from '../data/voice';
 import type { Chapter } from './chapters';
 import type { NoiseProfile } from './denoise';
+import type { ThumbnailSetting } from './thumbnail';
 import type { SoundId } from '../data/sfx';
 import { DEFAULT_SUBTITLE_STYLE, type SubtitleStyle } from '../data/subtitle-style';
 
@@ -194,6 +195,8 @@ export interface Project {
   /** 動画の終わりをフェードで暗くするか */
   endFade: boolean;
   publish: PublishInfo;
+  /** サムネイル（v0.9）。まだ作っていなければ null */
+  thumbnail: ThumbnailSetting | null;
   /** 次に使う番号（ID を作るため） */
   nextId: number;
 }
@@ -217,6 +220,7 @@ export function emptyProject(): Project {
     joinFades: [],
     endFade: false,
     publish: { title: '', description: '', chapters: [] },
+    thumbnail: null,
     nextId: 1,
   };
 }

@@ -185,6 +185,29 @@ export async function pickMediaFile(kind: MediaFileKind): Promise<File | null> {
   return file ?? null;
 }
 
+/** 画像などのファイルを保存する。保存したら true（選ぶ画面を閉じたら false） */
+export async function saveBlobFile(suggestedName: string, blob: Blob, description: string, extension: string): Promise<boolean> {
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName, types: [{ description, accept: { [blob.type]: [extension] } }], id: 'images-out' });
+      const w = await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+      return true;
+    } catch (e) {
+      if (isAbort(e)) return false;
+      throw e;
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = suggestedName;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return true;
+}
+
 function pickWithInput(accept: string, multiple: boolean): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input');

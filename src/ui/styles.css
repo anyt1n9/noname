@@ -226,10 +226,6 @@ button {
   .topbar .tools {
     margin-left: auto;
   }
-  /* 手順が2段目に出る分、お知らせを下げる */
-  .toast {
-    top: 106px;
-  }
 }
 
 .tools {
@@ -1475,4 +1471,22 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* サムネイルのプレビュー（v0.9） */
+.thumbnail-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* 手順が2段目に出る分、お知らせを下げる（.toast の決まりより後ろに書く） */
+@media (max-width: 1480px) {
+  .toast {
+    top: 106px;
+  }
 }
