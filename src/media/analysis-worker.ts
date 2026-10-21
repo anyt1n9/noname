@@ -1,5 +1,6 @@
 // 録画の音を調べる作業場所（Web Worker）。入っている音それぞれについて、大きさの記録を作る
 import { AudioSampleSink } from 'mediabunny';
+import { FeatureAccumulator, type TrackFeatures } from '../core/features';
 import { LevelAccumulator, peakBinCount } from '../core/peaks';
 import { errorText, openInput } from './probe';
 
@@ -11,7 +12,7 @@ export interface AnalysisRequest {
 }
 
 export type AnalysisEvent =
-  | { type: 'track'; track: number; peaks: Float32Array; rms: Float32Array; progress: number; done: boolean }
+  | { type: 'track'; track: number; peaks: Float32Array; rms: Float32Array; progress: number; done: boolean; features?: TrackFeatures }
   | { type: 'skip'; track: number }
   | { type: 'finished' }
   | { type: 'error'; message: string };
@@ -30,6 +31,7 @@ onmessage = async (e: MessageEvent<AnalysisRequest>) => {
         continue;
       }
       const acc = new LevelAccumulator(peakBinCount(endTime));
+      const features = new FeatureAccumulator(peakBinCount(endTime));
       const sink = new AudioSampleSink(track);
       let last = performance.now();
       for await (const sample of sink.samples()) {
@@ -40,6 +42,7 @@ onmessage = async (e: MessageEvent<AnalysisRequest>) => {
           channels.push(data);
         }
         acc.add(sample.timestamp, sample.sampleRate, channels);
+        features.add(sample.timestamp, sample.sampleRate, channels);
         const t = sample.timestamp + sample.duration;
         sample.close();
         const now = performance.now();
@@ -48,7 +51,7 @@ onmessage = async (e: MessageEvent<AnalysisRequest>) => {
           post({ type: 'track', track: index, peaks: acc.peaks.slice(), rms: acc.rms(), progress: Math.min(1, t / endTime), done: false });
         }
       }
-      post({ type: 'track', track: index, peaks: acc.peaks, rms: acc.rms(), progress: 1, done: true });
+      post({ type: 'track', track: index, peaks: acc.peaks, rms: acc.rms(), progress: 1, done: true, features: features.result() });
     }
     post({ type: 'finished' });
   } catch (err) {

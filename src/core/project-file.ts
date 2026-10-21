@@ -8,6 +8,8 @@ import {
 import { IMAGE_PLACES, type ImagePlace } from '../data/images';
 import { DEFAULT_BGM_VOLUME, musicTrack } from '../data/music';
 import { isSoundId } from '../data/sfx';
+import { DENOISE_STRENGTHS, type DenoiseStrength } from '../data/voice';
+import { DENOISE_FRAME } from './denoise';
 import { ARROW_DIRECTIONS, isShapeKind, SHAPE_COLORS, SHAPE_THICKNESS, type ArrowDirection, type ShapeThickness } from '../data/shapes';
 import {
   defaultAudio,
@@ -28,7 +30,7 @@ import {
 
 export const PROJECT_FILE_FORMAT = 'teroppa-project';
 /** 版の番号。新しい項目を足したら上げる（古い版のファイルも読めるようにしておく） */
-export const PROJECT_FILE_VERSION = 5;
+export const PROJECT_FILE_VERSION = 6;
 export const PROJECT_FILE_EXTENSION = '.teroppa';
 
 /** 画像・曲の中身（Asset の id → base64 の文字） */
@@ -256,12 +258,20 @@ function readAudio(value: unknown, trackCount: number): SourceAudio {
   if (!isObject(value) || !Array.isArray(value.roles) || value.roles.length !== trackCount) return fallback;
   if (!value.roles.every((r) => ROLES.includes(r as TrackRole))) return fallback;
   const gain = (v: unknown) => (isTime(v) && v <= 4 ? v : 1);
-  return {
+  const audio: SourceAudio = {
     roles: value.roles as TrackRole[],
     voiceGain: gain(value.voiceGain),
     otherGain: gain(value.otherGain),
     confirmed: value.confirmed === true,
   };
+  const d = value.denoise;
+  if (isObject(d) && DENOISE_STRENGTHS.some((x) => x.value === d.strength) && isObject(d.profile)) {
+    const m = d.profile.magnitudes;
+    if (isTime(d.profile.sampleRate) && Array.isArray(m) && m.length === DENOISE_FRAME / 2 + 1 && m.every((v) => isTime(v))) {
+      audio.denoise = { strength: d.strength as DenoiseStrength, profile: { sampleRate: d.profile.sampleRate, magnitudes: m as number[] } };
+    }
+  }
+  return audio;
 }
 
 function readSource(s: unknown): SourceInfo | null {

@@ -1,4 +1,5 @@
 // ブラウザの中への自動保存（IndexedDB）。編集内容と、録画の場所（ファイルの手がかり）だけを保存する
+import type { TrackFeatures } from '../core/features';
 import type { Project } from '../core/project';
 import { readProject } from '../core/project-file';
 
@@ -89,11 +90,12 @@ export interface SavedLevels {
   binSeconds: number;
   peaks: Float32Array;
   rms: Float32Array;
+  features: TrackFeatures;
 }
 
 /** 録画（名前・大きさ・更新日時）と音の番号で、記録を見分ける */
 export function levelsKey(source: { name: string; size: number; lastModified: number }, track: number): string {
-  return `levels:v2:${source.name}:${source.size}:${source.lastModified}:${track}`;
+  return `levels:v3:${source.name}:${source.size}:${source.lastModified}:${track}`;
 }
 
 export async function saveLevels(key: string, value: SavedLevels): Promise<void> {

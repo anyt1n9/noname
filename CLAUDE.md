@@ -2,7 +2,7 @@
 
 ブラウザで使う、YouTube の解説動画・ゲーム実況向けの動画編集ソフト。**仕様は `docs/spec.md` にある。作業の前に必ず読むこと。**
 
-- 現在の版：**v0.6.0**（v0.5 に加えて、画面の一部を拡大・速さを変える・矢印や枠）。次に作る範囲は `docs/spec.md` の「19. 開発の順番」の v0.7（声の仕上げ）。ユーザーの依頼で v1.0 まで順に作っている。
+- 現在の版：**v0.7.0**（v0.6 に加えて、声の仕上げ：声の大きさをそろえる・雑音を減らす・「えー」「あのー」の候補）。次に作る範囲は `docs/spec.md` の「19. 開発の順番」の v0.8（AI のお手伝い）。ユーザーの依頼で v1.0 まで順に作っている。
 - 版の番号は `package.json` の `version` だけで管理する（画面には `src/version.ts` から出る）。
 - ユーザーはプログラミング初学者で、動画編集も未経験。説明は専門用語を避け、何ができるようになったかを中心に伝える。
 - ユーザーは、すべての利用規約と法律を守ることを求めている。提案も必ずそれを守った内容にする。
@@ -61,7 +61,7 @@
 - 作品のデータ（`src/core/project.ts`）は、録画の情報（`sources`）と、タイムラインに並ぶかたまり（`clips`：どの録画の何秒から何秒か）だけ。ID は `nextId` で順に作る（乱数を使わない）。変更はすべて新しいデータを作って `history`（`src/core/history.ts`）に記録し、元に戻せるようにする。
 - プレビュー（`src/media/player.ts`）は、Mediabunny の CanvasSink（映像）と AudioBufferSink（音）で、かたまりを順につないで再生する。時刻の基準は AudioContext。
 - 書き出し（`src/media/export-worker.ts`）は Web Worker で行い、保存先のファイルに少しずつ書く（3時間でもメモリに溜めない）。映像は `FrameScheduler` で一定のコマ間隔にそろえ、音は `AudioConverter` で 48kHz・ステレオにそろえる（Mediabunny は、途中で音の形式が変わると書き出せないため）。
-- 音の調べ（`src/media/analysis-worker.ts`）は録画の音ごとに、50ミリ秒ごとの一番大きい値（波形）と平均の大きさ（RMS）を作り、IndexedDB に残す。結果はファイル（名前・大きさ・更新日時）で見分ける（作品を作り直すと録画の ID は同じ番号に戻るため、ID では見分けない）。
+- 音の調べ（`src/media/analysis-worker.ts`）は録画の音ごとに、50ミリ秒ごとの一番大きい値（波形）と平均の大きさ（RMS）、v0.7 からは K 特性の大きさ（ラウドネス用）・音色の変わり方・0 をまたぐ割合（`src/core/features.ts`）を作り、IndexedDB に残す（キーは `levels:v3:…`。中身を変えたら番号を上げる）。結果はファイル（名前・大きさ・更新日時）で見分ける（作品を作り直すと録画の ID は同じ番号に戻るため、ID では見分けない）。
 - 音の設定（`project.audio`）は録画ごとに、音の役割（声・ゲームの音など・使わない）と大きさを持つ。プレビュー・書き出しは「使わない」以外を混ぜ、無音カット・自動字幕は声の音だけを使う。書き出しの音は `src/media/export-audio.ts` の `TrackReader` で音ごとに読み、0.5秒ずつ混ぜる。
 - 無音カット（`src/core/silence.ts`）は録画の中の時刻で候補を見つけ、`removeSourceRanges` でまとめて取り除く（1回で元に戻せる）。
 - 文章で編集は `cutSubtitle`（字幕の時間を `removeSourceRanges` で取り除き、字幕も消す）。
@@ -73,6 +73,8 @@
 - BGM（`project.bgm`）は完成した動画の0秒からくり返す。大きさは `src/core/bgm.ts`（始まり・終わりのフェードと、しゃべっている間に小さくする）。しゃべっている範囲は画面側で声の大きさから計算し（`speechOnTimeline`）、書き出しの作業場所にも渡す。プレビューは入っている曲を `sound-worker.ts` で作って AudioBuffer にし、大きさの変化は少しずつ予約する。書き出しは、入っている曲は作業場所の中で作り、自分の曲は `LoopTrack` で少しずつ読みながらくり返す。
 - 速さ（v0.6）は `clip.speed`（ないときは 1）。タイムラインの長さは `clipLength`＝(end − start) ÷ speed で、時刻の変換（`locate`・`sourceRangeOnTimeline`・`timelineToSource`・`rangesOnTimeline`）はすべて速さを入れて計算する。録画の時刻を直接足し引きしない。音は `TimeStretcher`（`src/core/stretch.ts`、WSOLA）で声の高さを変えずに速さを変える（書き出しは `StretchReader`、プレビューは `scheduleStretched`）。
 - 画像・矢印や枠（`project.shapes`）・拡大（`project.zooms`）は、どれも録画の中の時刻の `ranges` を持つ（共通の計算は `src/core/ranged.ts`）。拡大は映像を描く前に `applyZoom` で描く位置を変える（字幕などは拡大しない）。プレビューの上で動かす枠は `src/ui/BoxHandles.tsx`。
+- 声の仕上げ（v0.7）：声の大きさは `normalizeVoices`（`src/core/finish.ts`）で `voiceGain` に入れる。雑音を減らす設定は `audio.denoise`（強さと、静かな部分から調べた雑音の音色）。書き出しの音は、かたまりごとに TrackReader →（声なら）NoiseReducer →（速さを変えたら）TimeStretcher の順に通す（`ProcessReader`）。混ぜたあとは `Limiter` を、かたまりを1つ遅らせて通す。プレビューは同じ加工を `scheduleProcessed` で行い、最後にブラウザのコンプレッサーで抑える。
+- 口ぐせの候補（`src/core/fillers.ts`）は、字幕の文字と、音の特徴（のばした声）から出す。試験的なので、画面でもそう書く。
 - つなぎ目のフェード（`project.joinFades`：つなぎ目の後ろのかたまりの ID、`endFade`）は `src/core/fades.ts`。かたまりを切り分けると前の部分が ID を引き継ぐので、フェードはつなぎ目に残る。フェードは録画の音だけにかけ、BGM・効果音にはかけない。
 - 字幕のフォントは Noto Sans JP（`@fontsource/noto-sans-jp`）を FontFace で登録し、使う文字の分だけ読み込む（`src/media/caption-font.ts`）。
 - `.npmrc` で部品のインストールスクリプトを止めている（transformers.js が連れてくる onnxruntime-node は、ブラウザでは使わないうえ、インストール時に外部から追加のファイルを取ろうとするため）。

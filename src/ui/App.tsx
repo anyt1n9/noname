@@ -4,7 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { speechOnTimeline } from '../core/bgm';
 import { addEffect, effectLength, effectsOnTimeline, removeEffect } from '../core/effects';
 import { activeJoinFades, fadeSourceChanges, nearestJoin, toggleJoinFade } from '../core/fades';
+import { findFillers, type VoiceFeatures } from '../core/fillers';
+import { normalizeVoices, quietRanges } from '../core/finish';
 import { guideMessage } from '../core/guide';
+import { toDb } from '../core/loudness';
 import { addImage, imagesAt, imagesOnTimeline, moveImage, removeImage, setImagePlace, setImageTime } from '../core/images';
 import { rangedAt } from '../core/ranged';
 import { addShape, moveShape, placeShape, removeShape, setShapeStyle, setShapeTime, shapesAt, shapesOnTimeline } from '../core/shapes';
@@ -21,6 +24,7 @@ import {
   updateSource,
   usedAssetIds,
   usedSources,
+  voiceTracks,
   type BgmSetting,
   type Project,
   type SourceAudio,
@@ -41,7 +45,8 @@ import {
   subtitlesOnTimeline,
 } from '../core/subtitles';
 import { formatClock } from '../core/time';
-import { clipStarts, deleteRange, locate as locateTime, moveClip, setSpeed, speedAt, totalDuration } from '../core/timeline';
+import { clipStarts, deleteRange, locate as locateTime, moveClip, removeSourceRanges, setSpeed, sourceRangeOnTimeline, speedAt, totalDuration } from '../core/timeline';
+import type { DenoiseStrength } from '../data/voice';
 import { MIN_IMAGE_WIDTH, NEW_IMAGE_SECONDS } from '../data/images';
 import { NEW_SHAPE_SECONDS, SHAPE_KINDS, type ShapeKind } from '../data/shapes';
 import { MIN_ZOOM_WIDTH, NEW_ZOOM_SECONDS } from '../data/zoom';
@@ -70,6 +75,7 @@ import { setImageSource } from '../media/compose';
 import { Player, type PlayerState } from '../media/player';
 import { errorText, probeFile } from '../media/probe';
 import { PREVIEW_HEIGHT, PREVIEW_WIDTH, SourceRegistry } from '../media/registry';
+import { measureSourceNoise } from '../media/noise';
 import { assetMusic, builtinMusic, effectBuffer } from '../media/sounds';
 import { loadWork, saveWork } from '../media/storage';
 import { AudioDialog, LISTEN_SECONDS } from './AudioDialog';
@@ -78,8 +84,8 @@ import { BoxHandles, type Box } from './BoxHandles';
 import { DecoratePanel, type DecorateTab, type Selected } from './DecoratePanel';
 import { ExportPanel } from './ExportPanel';
 import { GuidePanel } from './GuidePanel';
-import { SoundPanel } from './SoundPanel';
-import { SilencePanel } from './SilencePanel';
+import { SoundPanel, type SoundTab } from './SoundPanel';
+import { SilencePanel, type SilenceTab } from './SilencePanel';
 import { SubtitlePanel } from './SubtitlePanel';
 import { useTranscription } from './useTranscription';
 import { Icon } from './icons';
@@ -173,6 +179,13 @@ export function App() {
   const [boxDraft, setBoxDraft] = useState<(Selected & { box: Box }) | null>(null);
   /** BGM・効果音：試しに鳴らしているもの */
   const [previewing, setPreviewing] = useState<string | null>(null);
+  /** 「間」を切る手順のタブと、口ぐせ（試験的）の候補で残すもの・直前に切った秒数 */
+  const [silenceTab, setSilenceTab] = useState<SilenceTab>('silence');
+  const [keptFillers, setKeptFillers] = useState<Set<string>>(new Set());
+  const [lastFillerCut, setLastFillerCut] = useState<number | null>(null);
+  /** 音の仕上げのタブと、直前に声の大きさをそろえた結果 */
+  const [soundTab, setSoundTab] = useState<SoundTab>('voice');
+  const [normalized, setNormalized] = useState<{ name: string; db: number }[] | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<Player | null>(null);
@@ -210,6 +223,21 @@ export function App() {
     [candidates, kept],
   );
   const unconfirmed = used.filter((s) => s.audioTrackCount > 1 && !sourceAudio(project, s.id).confirmed);
+
+  // 口ぐせの候補（試験的。「間」を切る手順の口ぐせのタブのときだけ）
+  const fillers = useMemo(() => {
+    if (step !== 'silence' || silenceTab !== 'fillers') return [];
+    const features = new Map<string, VoiceFeatures>();
+    for (const s of used) {
+      const f = analysis.voiceFeatures(s.id, sourceAudio(project, s.id));
+      if (f) features.set(s.id, f);
+    }
+    return findFillers(project, features).flatMap((c) => {
+      const span = sourceRangeOnTimeline(project, c)[0];
+      return span ? [{ ...c, from: span[0], to: span[1] }] : [];
+    });
+  }, [step, silenceTab, project, analysisReady ? 'ready' : levelsTick]);
+  const fillerLength = fillers.filter((c) => !keptFillers.has(c.id)).reduce((t, c) => t + (c.to - c.from), 0);
 
   /** 作品を変える（元に戻せるように記録する） */
   const apply = useCallback((next: Project) => setHistory((h) => record(h, next)), []);
@@ -692,6 +720,9 @@ export function App() {
     setSelection(null);
     setLastCut(null);
     setKept(new Set());
+    setLastFillerCut(null);
+    setKeptFillers(new Set());
+    setNormalized(null);
     setStep(id);
   };
 
@@ -859,6 +890,58 @@ export function App() {
 
   /** 音の設定を変える（元に戻せる操作として記録する） */
   const changeAudio = (sourceId: string, audio: SourceAudio) => apply(setSourceAudio(projectRef.current, sourceId, audio));
+
+  /** 口ぐせの候補をまとめて切る */
+  const cutFillers = () => {
+    const targets = fillers.filter((c) => !keptFillers.has(c.id));
+    if (targets.length === 0) return;
+    const next = removeSourceRanges(projectRef.current, targets);
+    if (next === projectRef.current) return;
+    playerRef.current?.pause();
+    apply(next);
+    setKeptFillers(new Set());
+    setLastFillerCut(fillerLength);
+  };
+
+  /** 声の大きさをそろえる（元に戻せる） */
+  const normalize = () => {
+    const p = projectRef.current;
+    const loudness = new Map(usedSources(p).map((s) => [s.id, analysis.voiceLoudness(s.id, sourceAudio(p, s.id)) ?? null]));
+    const r = normalizeVoices(p, loudness);
+    if (r.changes.length > 0) apply(r.project);
+    setNormalized(r.changes.map((c) => ({ name: p.sources.find((s) => s.id === c.sourceId)?.name ?? '', db: c.db })));
+  };
+
+  /** 雑音を減らす。はじめて使う録画は、静かな部分から雑音の音色を調べる */
+  const changeDenoise = async (strength: DenoiseStrength | 'off') => {
+    let p = projectRef.current;
+    const failed: string[] = [];
+    for (const s of usedSources(p)) {
+      const audio = sourceAudio(p, s.id);
+      if (strength === 'off') {
+        if (audio.denoise) p = setSourceAudio(p, s.id, { ...audio, denoise: null });
+        continue;
+      }
+      if (audio.denoise) {
+        if (audio.denoise.strength !== strength) p = setSourceAudio(p, s.id, { ...audio, denoise: { ...audio.denoise, strength } });
+        continue;
+      }
+      const level = analysis.voiceLevel(s.id, audio);
+      const ranges = level ? quietRanges(level) : [];
+      setBusy('雑音の音色を調べています…');
+      const profile = ranges.length > 0 ? await measureSourceNoise(registry, s.id, voiceTracks(audio), ranges).catch(() => null) : null;
+      setBusy(null);
+      if (!profile) {
+        failed.push(s.name);
+        continue;
+      }
+      p = setSourceAudio(p, s.id, { ...audio, denoise: { strength, profile } });
+    }
+    if (p !== projectRef.current) apply(p);
+    if (failed.length > 0) {
+      setNotice({ kind: 'error', text: `しゃべっていない静かな部分が見つからず、雑音の音色を調べられませんでした：${failed.join('、')}` });
+    }
+  };
 
   const listen = async (track: number, from: number) => {
     if (!audioFor) return;
@@ -1062,6 +1145,27 @@ export function App() {
 
         {step === 'silence' ? (
           <SilencePanel
+            tab={silenceTab}
+            onTab={(tab) => {
+              setSilenceTab(tab);
+              setLastCut(null);
+              setLastFillerCut(null);
+            }}
+            fillers={{
+              candidates: fillers,
+              kept: keptFillers,
+              length: fillerLength,
+              lastCut: lastFillerCut,
+              onCut: cutFillers,
+              onSeek: (t) => playerRef.current?.seek(t),
+              onToggle: (id) =>
+                setKeptFillers((k) => {
+                  const n = new Set(k);
+                  if (n.has(id)) n.delete(id);
+                  else n.add(id);
+                  return n;
+                }),
+            }}
             progress={analysisProgress}
             ready={analysisReady}
             count={candidates.length}
@@ -1183,6 +1287,21 @@ export function App() {
         ) : step === 'sound' ? (
           <SoundPanel
             project={project}
+            tab={soundTab}
+            onTab={(tab) => {
+              setSoundTab(tab);
+              stopPreview();
+            }}
+            voices={used.map((s) => ({
+              id: s.id,
+              name: s.name,
+              gainDb: toDb(sourceAudio(project, s.id).voiceGain),
+              loudness: analysis.voiceLoudness(s.id, sourceAudio(project, s.id)),
+            }))}
+            denoise={used.map((s) => sourceAudio(project, s.id).denoise?.strength).find((x) => x) ?? 'off'}
+            normalized={normalized}
+            onNormalize={normalize}
+            onDenoise={(d) => void changeDenoise(d)}
             effects={timelineEffects}
             previewing={previewing}
             speechReady={analysisReady}
@@ -1241,13 +1360,27 @@ export function App() {
           binSeconds={analysis.binSeconds}
           levelsTick={levelsTick}
           marks={
-            step === 'silence' && lastCut === null
+            step === 'silence' && silenceTab === 'fillers'
+              ? fillers.map((c) => ({ id: c.id, from: c.from, to: c.to, kept: keptFillers.has(c.id) }))
+              : step === 'silence' && lastCut === null
               ? marks
               : step === 'subtitles' && pendingCut
                 ? timelineSubtitles.filter((x) => x.id === pendingCut).map((x) => ({ id: x.key, from: x.from, to: x.to, kept: false }))
                 : undefined
           }
-          onToggleMark={step === 'silence' ? toggleKept : undefined}
+          onToggleMark={
+            step !== 'silence'
+              ? undefined
+              : silenceTab === 'fillers'
+                ? (id) =>
+                    setKeptFillers((k) => {
+                      const n = new Set(k);
+                      if (n.has(id)) n.delete(id);
+                      else n.add(id);
+                      return n;
+                    })
+                : toggleKept
+          }
           lanes={lanes}
           onLaneItemClick={(lane, id, t) => {
             playerRef.current?.seek(t);

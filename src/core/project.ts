@@ -2,6 +2,8 @@
 // 「どの録画の、どこからどこまでを、どの順に使うか」だけを持つ。
 import type { ImagePlace } from '../data/images';
 import type { ArrowDirection, ShapeKind, ShapeThickness } from '../data/shapes';
+import type { DenoiseStrength } from '../data/voice';
+import type { NoiseProfile } from './denoise';
 import type { SoundId } from '../data/sfx';
 import { DEFAULT_SUBTITLE_STYLE, type SubtitleStyle } from '../data/subtitle-style';
 
@@ -55,6 +57,8 @@ export interface SourceAudio {
   otherGain: number;
   /** 音が複数ある録画で、使う人が役割を確かめたか */
   confirmed: boolean;
+  /** 声の雑音を減らす設定（v0.7）。雑音の音色は、録画の静かな部分から調べたもの */
+  denoise?: { strength: DenoiseStrength; profile: NoiseProfile } | null;
 }
 
 /**

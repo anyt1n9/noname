@@ -327,7 +327,7 @@ describe('作品ファイル（v0.5）', () => {
 });
 
 describe('手順（v0.5）', () => {
-  it('字幕のあとに「飾り」「BGM・効果音」が入り、最後が書き出し', () => {
+  it('字幕のあとに「飾り」「音の仕上げ」が入り、最後が書き出し', () => {
     expect(STEPS.map((s) => s.id)).toEqual(['import', 'silence', 'subtitles', 'decorate', 'sound', 'export']);
     expect(nextStep('subtitles')?.id).toBe('decorate');
     expect(nextStep('sound')?.id).toBe('export');

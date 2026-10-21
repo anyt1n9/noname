@@ -7,6 +7,8 @@ import { fadeGains } from '../core/fades';
 import { audioSlice, samplesFor } from '../core/frames';
 import { activeTracks, clipSpeed, sourceAudio, type Clip, type Project } from '../core/project';
 import { renderSound } from '../core/sfx';
+import { NoiseReducer } from '../core/denoise';
+import { Limiter } from '../core/limiter';
 import { TimeStretcher } from '../core/stretch';
 import { clipLength } from '../core/timeline';
 import { OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE } from '../data/quality';
@@ -110,9 +112,14 @@ interface SampleReader {
   close(): Promise<void>;
 }
 
-/** 速さを変えたかたまりの音。録画の音を読みながら、声の高さを変えずに速さを変える */
-export class StretchReader implements SampleReader {
-  private stretcher: TimeStretcher;
+/** 音を少しずつ加工する係（雑音を減らす・速さを変える）。入れたものを少し遅れて出す */
+export interface Processor {
+  push(data: Float32Array[]): Float32Array[];
+  flush(): Float32Array[];
+}
+
+/** 録画の音を読みながら、順に加工する（雑音を減らす → 速さを変える） */
+export class ProcessReader implements SampleReader {
   private chunks: Float32Array[][] = [];
   private queued = 0;
   private consumed = 0;
@@ -122,8 +129,8 @@ export class StretchReader implements SampleReader {
   constructor(
     private reader: TrackReader,
     clip: Clip,
+    private processors: Processor[],
   ) {
-    this.stretcher = new TimeStretcher(OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE, clipSpeed(clip));
     this.sourceNeeded = samplesFor(clip.end - clip.start, OUTPUT_SAMPLE_RATE);
   }
 
@@ -132,9 +139,18 @@ export class StretchReader implements SampleReader {
       if (this.consumed < this.sourceNeeded) {
         const take = Math.min(BLOCK, this.sourceNeeded - this.consumed);
         this.consumed += take;
-        this.add(this.stretcher.push(await this.reader.read(take)));
+        let data = await this.reader.read(take);
+        for (const p of this.processors) data = p.push(data);
+        this.add(data);
       } else {
-        this.add(this.stretcher.flush());
+        // 前の係の残りを、後ろの係に通してから出し切る
+        let data: Float32Array[] | null = null;
+        for (const p of this.processors) {
+          const pushed: Float32Array[] | null = data ? p.push(data) : null;
+          const rest: Float32Array[] = p.flush();
+          data = pushed ? pushed.map((d: Float32Array, c: number) => concat(d, rest[c])) : rest;
+        }
+        if (data) this.add(data);
         this.flushed = true;
       }
     }
@@ -161,6 +177,25 @@ export class StretchReader implements SampleReader {
   async close(): Promise<void> {
     await this.reader.close();
   }
+}
+
+function concat(a: Float32Array, b: Float32Array): Float32Array {
+  const out = new Float32Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
+}
+
+/** かたまりの音を読む係を作る（声の雑音を減らす・速さを変えるときは加工する係を通す） */
+function trackReaderFor(project: Project, clip: Clip, track: InputAudioTrack, index: number): SampleReader {
+  const reader = new TrackReader(track, clip);
+  const audio = sourceAudio(project, clip.sourceId);
+  const processors: Processor[] = [];
+  if (audio.denoise && audio.roles[index] === 'voice') {
+    processors.push(new NoiseReducer(OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE, audio.denoise.profile, audio.denoise.strength));
+  }
+  if (clipSpeed(clip) !== 1) processors.push(new TimeStretcher(OUTPUT_CHANNELS, OUTPUT_SAMPLE_RATE, clipSpeed(clip)));
+  return processors.length === 0 ? reader : new ProcessReader(reader, clip, processors);
 }
 
 /** BGM を順に取り出す係（最後まで来たら最初に戻る） */
@@ -286,6 +321,16 @@ export async function writeAudio(ctx: AudioContextForExport): Promise<void> {
   /** 完成した動画の何サンプル目まで書いたか（BGM・効果音・フェードの位置に使う） */
   let position = 0;
   const effects = new EffectMixer(ctx.project);
+  // 音が割れないように抑える係。先読みのため、かたまりを1つ遅らせて書く
+  const limiter = new Limiter(OUTPUT_SAMPLE_RATE);
+  let held: { mix: Float32Array[]; count: number; timestamp: number } | null = null;
+  const write = async (mix: Float32Array[], count: number, timestamp: number) => {
+    if (held) {
+      limiter.process(held.mix, mix);
+      await addPlanar(ctx.source, held.mix, held.count, held.timestamp);
+    }
+    held = { mix, count, timestamp };
+  };
   for (const clip of ctx.project.clips) {
     const length = clipLength(clip);
     const needed = samplesFor(length, OUTPUT_SAMPLE_RATE);
@@ -294,8 +339,7 @@ export async function writeAudio(ctx: AudioContextForExport): Promise<void> {
     for (const { index, gain } of activeTracks(sourceAudio(ctx.project, clip.sourceId))) {
       const track = available[index];
       if (!track || gain <= 0) continue;
-      const reader = new TrackReader(track, clip);
-      readers.push({ reader: clipSpeed(clip) === 1 ? reader : new StretchReader(reader, clip), gain });
+      readers.push({ reader: trackReaderFor(ctx.project, clip, track, index), gain });
     }
     let written = 0;
     try {
@@ -327,9 +371,7 @@ export async function writeAudio(ctx: AudioContextForExport): Promise<void> {
           }
         }
         position += count;
-        // 音が大きすぎて割れないよう、はみ出した分は切る（v0.7 でなめらかに抑える）
-        for (const m of mix) for (let i = 0; i < m.length; i++) m[i] = m[i] > 1 ? 1 : m[i] < -1 ? -1 : m[i];
-        await addPlanar(ctx.source, mix, count, outStart + written / OUTPUT_SAMPLE_RATE);
+        await write(mix, count, outStart + written / OUTPUT_SAMPLE_RATE);
         written += count;
         ctx.onProgress(outStart + written / OUTPUT_SAMPLE_RATE);
       }
@@ -337,6 +379,11 @@ export async function writeAudio(ctx: AudioContextForExport): Promise<void> {
       for (const { reader } of readers) await reader.close().catch(() => undefined);
     }
     outStart += length;
+  }
+  const last = held as { mix: Float32Array[]; count: number; timestamp: number } | null;
+  if (last) {
+    limiter.process(last.mix, null);
+    await addPlanar(ctx.source, last.mix, last.count, last.timestamp);
   }
 }
 

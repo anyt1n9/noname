@@ -12,7 +12,7 @@ export const STEPS: readonly Step[] = [
   { id: 'silence', label: '「間」を切る' },
   { id: 'subtitles', label: '字幕' },
   { id: 'decorate', label: '飾り' },
-  { id: 'sound', label: 'BGM・効果音' },
+  { id: 'sound', label: '音の仕上げ' },
   { id: 'export', label: '書き出し' },
 ];
 

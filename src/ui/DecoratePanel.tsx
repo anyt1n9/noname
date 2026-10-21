@@ -98,7 +98,7 @@ export function DecoratePanel(p: Props) {
       {p.tab === 'fade' && <FadeTab {...p} />}
       <div class="actions sticky">
         <button class="btn primary big" onClick={p.onNext}>
-          次へ：BGM・効果音
+          次へ：音の仕上げ
           <Icon name="next" />
         </button>
       </div>

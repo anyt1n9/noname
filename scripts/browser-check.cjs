@@ -41,6 +41,14 @@ function makeFixtures() {
   ff('-f lavfi -i color=c=black:size=1280x720:rate=30 -f lavfi -i "aevalsrc=0.4*sin(2*PI*220*t)*lt(mod(t\\,4)\\,2):s=48000" -t 8 -c:v libvpx-vp9 -b:v 300k -deadline realtime -cpu-used 8 -c:a libopus', 'f.webm');
   ff('-f lavfi -i color=c=red:size=400x200 -frames:v 1', 'red.png');
   ff('-f lavfi -i sine=frequency=880:sample_rate=44100 -t 3', 'tone.wav');
+  // v0.7：しゃべりの代わり（高さが揺れる音）と、「えー」の代わり（同じ高さでのばした音）に、雑音（ざー・ぶーん）を足した録画
+  const talk = '0.25*sin(2*PI*150*t+6*sin(2*PI*3*t))*(0.6+0.4*sin(2*PI*5*t))';
+  const er = '0.2*(sin(2*PI*150*t)+0.5*sin(2*PI*300*t))';
+  const on = (a, b) => `between(t\\,${a}\\,${b})`;
+  const voice = `${talk}*(${on(0.3, 2.5)}+${on(4.6, 7)}+${on(8.6, 11)})+${er}*${on(3.2, 3.9)}`;
+  const hiss = '0.02*(random(1)*2-1)+0.015*sin(2*PI*60*t)';
+  ff(`-f lavfi -i color=c=gray:size=640x360:rate=30 -f lavfi -i "aevalsrc=${voice}+${hiss}:s=48000" -t 12 -c:v libvpx-vp9 -b:v 200k -deadline realtime -cpu-used 8 -c:a libopus -b:a 128k`, 'g.webm');
+  fs.writeFileSync(path.join(FIX, 'g.srt'), '1\n00:00:03,200 --> 00:00:03,900\nえー\n\n2\n00:00:04,600 --> 00:00:07,000\nボスの弱点は背中です\n');
 }
 
 // ファイルを選ぶ画面・保存する場所を選ぶ画面の代わり
@@ -123,7 +131,7 @@ async function main() {
   await page.waitForSelector('.guide h2');
   await page.screenshot({ path: path.join(OUT, '01-empty.png') });
 
-  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm', 'e.mkv', 'subs.srt', 'f.webm', 'red.png', 'tone.wav']) await putFixture(page, n);
+  for (const n of ['a.webm', 'b.mkv', 'c.webm', 'd.webm', 'e.mkv', 'subs.srt', 'f.webm', 'red.png', 'tone.wav', 'g.webm', 'g.srt']) await putFixture(page, n);
 
   // 読み込み
   await page.evaluate(() => window.__pickQueue.push(['a.webm', 'b.mkv']));
@@ -356,8 +364,9 @@ async function main() {
   await page.getByRole('checkbox', { name: /0:08 のつなぎ目をフェードにする/ }).check();
   check('つなぎ目にフェードを入れられる', await page.getByRole('checkbox', { name: /0:08 のつなぎ目/ }).isChecked());
   // BGM と効果音
-  await page.getByRole('button', { name: /次へ：BGM・効果音/ }).click();
-  await page.waitForSelector('text=BGM と効果音を入れましょう');
+  await page.getByRole('button', { name: /次へ：音の仕上げ/ }).click();
+  await page.waitForSelector('text=音を仕上げましょう');
+  await page.getByRole('tab', { name: 'BGM' }).click();
   await page.getByRole('radio', { name: /おだやか/ }).click();
   await page.screenshot({ path: path.join(OUT, '16a-bgm.png') });
   await page.getByRole('button', { name: 'おだやかを試しに聴く' }).click();
@@ -365,6 +374,7 @@ async function main() {
   check('入っている曲を試しに聴ける', true);
   await page.getByRole('button', { name: 'おだやかを止める' }).click();
   await page.locator('.timeline-wrap canvas').click({ position: { x: (5 / 16) * box3.width, y: 26 + 22 + 40 } });
+  await page.getByRole('tab', { name: '効果音' }).click();
   await page.locator('.sound-cell').first().getByRole('button', { name: 'ピコン', exact: true }).click();
   check('効果音を再生位置に置ける', (await page.locator('.sound-panel .item-list li').count()) === 1);
   await page.screenshot({ path: path.join(OUT, '16-sound.png') });
@@ -402,7 +412,8 @@ async function main() {
   check('つなぎ目のフェードで音も小さくなる', fadeQuiet < quiet + 6, `${fadeQuiet}dB`);
   // 自分で用意した曲（著作権の確認をしてから選ぶ）
   await page.getByRole('button', { name: /編集に戻る/ }).click();
-  await goStep(page, 'BGM・効果音');
+  await goStep(page, '音の仕上げ');
+  await page.getByRole('tab', { name: 'BGM' }).click();
   await page.getByRole('button', { name: '自分で用意した曲を使う' }).click();
   check('自分で用意した曲を選ぶ前に、著作権の注意を出す', (await page.locator('.note.rights').innerText()).includes('著作権'));
   await page.evaluate(() => window.__pickQueue.push(['tone.wav']));
@@ -508,6 +519,71 @@ async function main() {
   await page.waitForTimeout(500);
   const v6Saved = JSON.parse((await readOpfs(page, 'v06.teroppa')).toString('utf8'));
   check('作品ファイルに速さ・図形・拡大も入る', v6Saved.project.shapes.length === 2 && v6Saved.project.zooms.length === 1 && v6Saved.project.clips.some((c) => c.speed === 2));
+
+  // 声の仕上げ（v0.7）
+  await page.getByRole('button', { name: /編集に戻る/ }).click();
+  await page.getByRole('button', { name: '新しく' }).click();
+  await page.evaluate(() => window.__pickQueue.push(['g.webm']));
+  await page.getByRole('button', { name: '録画を選ぶ' }).click();
+  await page.waitForSelector('.toast');
+  // 字幕ファイルで「えー」の行を入れておく
+  await goStep(page, '字幕');
+  await page.evaluate(() => window.__pickQueue.push(['g.srt']));
+  await page.getByRole('button', { name: /字幕ファイル（.srt）を読み込む/ }).click();
+  await page.waitForSelector('.sub-row');
+  // 口ぐせ（試験的）
+  await goStep(page, '「間」を切る');
+  await page.getByRole('tab', { name: /えー/ }).click();
+  await page.waitForSelector('text=候補を', { timeout: 60000 });
+  const fillerRows = await page.locator('.item-list[aria-label="口ぐせの候補"] li').allInnerTexts();
+  check('字幕の「えー」を、切る候補にする', fillerRows.some((r) => r.includes('字幕「えー」')), fillerRows.join(' / '));
+  await page.screenshot({ path: path.join(OUT, '23-fillers.png') });
+  const beforeFiller = sec(await timeText(page));
+  await page.getByRole('button', { name: 'まとめて切る' }).click();
+  await page.waitForSelector('text=短くなりました');
+  const afterFiller = sec(await timeText(page));
+  check('口ぐせをまとめて切ると短くなる', beforeFiller - afterFiller > 0.5 && beforeFiller - afterFiller < 1.5, `${beforeFiller} → ${afterFiller}`);
+  await page.keyboard.press('Control+z');
+  check('口ぐせを切ったのも元に戻せる', Math.abs(sec(await timeText(page)) - beforeFiller) < 0.05);
+  // 声の大きさをそろえる・雑音を減らす
+  await goStep(page, '音の仕上げ');
+  await page.getByRole('tab', { name: '声' }).click();
+  await page.waitForSelector('text=LUFS', { timeout: 60000 });
+  await page.getByRole('button', { name: '声の大きさをそろえる' }).click();
+  const normalizedNote = await page.locator('.sound-panel .note').first().innerText();
+  check('声の大きさをそろえる', /g\.webm：[+-][\d.]+dB/.test(normalizedNote), normalizedNote);
+  await page.getByRole('radiogroup', { name: '雑音を減らす強さ' }).getByRole('radio', { name: '強く' }).click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="雑音を減らす強さ"] [aria-checked="true"]')?.textContent === '強く', null, { timeout: 30000 });
+  check('雑音を減らす設定にできる', true);
+  await page.screenshot({ path: path.join(OUT, '24-voice.png') });
+  // 再生してもエラーにならない（雑音を減らしながら鳴らす）
+  await page.keyboard.press('Space');
+  await page.waitForTimeout(1200);
+  await page.keyboard.press('Space');
+  const v7 = await exportTo(page, 'v07.mp4');
+  const v7File = path.join(OUT, 'v07.mp4');
+  check('声を仕上げた動画を書き出せる', Math.abs(Number(v7.format.duration) - 12) < 0.1, `${v7.format.duration}秒`);
+  const stats = (file, from, len) => {
+    const out = execSync(`ffmpeg -v info -ss ${from} -t ${len} -i ${file} -af astats=metadata=0 -f null - 2>&1`).toString().split('Overall')[1] ?? '';
+    const num = (re) => {
+      const m = re.exec(out);
+      return m ? (m[1] === '-inf' ? -200 : Number(m[1])) : NaN;
+    };
+    return { rms: num(/RMS level dB: (-?[\d.]+|-inf)/), peak: num(/Peak level dB: (-?[\d.]+|-inf)/) };
+  };
+  const original = path.join(FIX, 'g.webm');
+  const noiseBefore = stats(original, 7.3, 1);
+  const noiseAfter = stats(v7File, 7.3, 1);
+  const voiceBefore = stats(original, 5, 1.5);
+  const voiceAfter = stats(v7File, 5, 1.5);
+  // 声を大きくしたうえで、雑音は声よりも大きく減っている
+  check(
+    '雑音が減っている（声との差が広がる）',
+    voiceAfter.rms - noiseAfter.rms > voiceBefore.rms - noiseBefore.rms + 6,
+    `前：声${voiceBefore.rms.toFixed(1)}・雑音${noiseBefore.rms.toFixed(1)} → 後：声${voiceAfter.rms.toFixed(1)}・雑音${noiseAfter.rms.toFixed(1)}`,
+  );
+  const whole = stats(v7File, 0, 12);
+  check('音が割れていない（一番大きいところが上限より下）', whole.peak <= -0.5, `${whole.peak}dB`);
 
   // 明るい画面・狭い画面
   await page.getByRole('button', { name: /編集に戻る/ }).click();

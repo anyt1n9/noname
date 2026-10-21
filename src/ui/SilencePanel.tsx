@@ -1,10 +1,26 @@
-// 「間」を切る手順。候補を見せて、確かめてからまとめて切る
+// 「間」を切る手順。候補を見せて、確かめてからまとめて切る。口ぐせ（v0.7・試験的）も同じように切れる
+import type { FillerCandidate } from '../core/fillers';
 import type { SourceInfo } from '../core/project';
-import { formatLength } from '../core/time';
+import { formatClock, formatLength } from '../core/time';
 import { CUT_STRENGTHS } from '../data/silence';
 import { Icon } from './icons';
 
+export type SilenceTab = 'silence' | 'fillers';
+
+export interface FillerProps {
+  candidates: (FillerCandidate & { from: number })[];
+  kept: Set<string>;
+  length: number;
+  lastCut: number | null;
+  onCut(): void;
+  onSeek(t: number): void;
+  onToggle(id: string): void;
+}
+
 interface Props {
+  tab: SilenceTab;
+  onTab(tab: SilenceTab): void;
+  fillers: FillerProps;
   /** 音を調べている進み具合（0〜1） */
   progress: number;
   ready: boolean;
@@ -24,11 +40,30 @@ interface Props {
   onAudioSettings(sourceId: string): void;
 }
 
+const TABS: readonly { value: SilenceTab; label: string }[] = [
+  { value: 'silence', label: '「間」' },
+  { value: 'fillers', label: '「えー」「あのー」（試験的）' },
+];
+
+function Tabs(p: { tab: SilenceTab; onTab(tab: SilenceTab): void }) {
+  return (
+    <div class="tabs" role="tablist" aria-label="切るものの種類">
+      {TABS.map((t) => (
+        <button key={t.value} role="tab" aria-selected={p.tab === t.value} class={p.tab === t.value ? 'on' : ''} onClick={() => p.onTab(t.value)}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function SilencePanel(p: Props) {
+  if (p.tab === 'fillers') return <FillerPanel {...p} />;
   if (p.lastCut !== null) {
     return (
       <div class="guide" aria-live="polite">
         <h2>「間」を切りました</h2>
+        <Tabs tab={p.tab} onTab={p.onTab} />
         <p>
           動画が{formatLength(p.lastCut)}短くなりました。気に入らなければ「元に戻す」（Ctrl+Z）で戻せます。
         </p>
@@ -48,6 +83,7 @@ export function SilencePanel(p: Props) {
   return (
     <div class="guide" aria-live="polite">
       <h2>しゃべっていない「間」を切りましょう</h2>
+      <Tabs tab={p.tab} onTab={p.onTab} />
       {!p.ready ? (
         <>
           <p>録画の音を調べています… {Math.floor(p.progress * 100)}%</p>
@@ -95,6 +131,54 @@ export function SilencePanel(p: Props) {
         </button>
         <button class="btn" onClick={p.onNext}>
           切らずに次へ
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FillerPanel(p: Props) {
+  const f = p.fillers;
+  const left = f.candidates.filter((c) => !f.kept.has(c.id));
+  return (
+    <div class="guide" aria-live="polite">
+      <h2>「えー」「あのー」を切りましょう</h2>
+      <Tabs tab={p.tab} onTab={p.onTab} />
+      <p class="note">
+        試験的な機能です。字幕の中の「えー」などの行と、前後に「間」がある、同じ音をのばした短い声を探します。まちがえて見つけることがあるので、印の場所を再生して確かめてから切ってください。
+      </p>
+      {f.lastCut !== null && <p>動画が{formatLength(f.lastCut)}短くなりました。気に入らなければ「元に戻す」（Ctrl+Z）で戻せます。</p>}
+      {!p.ready ? (
+        <p>録画の音を調べています… {Math.floor(p.progress * 100)}%</p>
+      ) : f.candidates.length === 0 ? (
+        <p>口ぐせの候補は見つかりませんでした。</p>
+      ) : (
+        <>
+          <p>
+            候補を<strong>{f.candidates.length}か所</strong>見つけました。切ると<strong>{formatLength(f.length)}</strong>短くなります。残したいものは、一覧かタイムラインの印を押すと残せます。
+          </p>
+          <ul class="item-list" aria-label="口ぐせの候補">
+            {f.candidates.map((c) => (
+              <li key={c.id} class={f.kept.has(c.id) ? 'kept' : ''}>
+                <button class="item-main" onClick={() => f.onSeek(c.from)} title="この場所を再生して確かめる">
+                  <span class="item-time">{formatClock(c.from, true)}</span>
+                  <span class="item-name">{c.reason === 'text' ? `字幕「${c.text}」` : 'のばした声'}</span>
+                </button>
+                <button class="btn small ghost" onClick={() => f.onToggle(c.id)}>
+                  {f.kept.has(c.id) ? '切る' : '残す'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <div class="actions sticky">
+        <button class="btn primary big" onClick={f.onCut} disabled={!p.ready || left.length === 0}>
+          まとめて切る
+        </button>
+        <button class="btn" onClick={p.onNext}>
+          次へ：字幕
+          <Icon name="next" />
         </button>
       </div>
     </div>

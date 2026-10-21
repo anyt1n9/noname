@@ -1,13 +1,41 @@
-// BGM・効果音の手順（v0.5）
+// 音の仕上げの手順。声の仕上げ（v0.7）・BGM・効果音（v0.5）
 import { useState } from 'preact/hooks';
 import type { BgmSetting, Project } from '../core/project';
 import { formatClock, formatLength } from '../core/time';
 import { DEFAULT_BGM_VOLUME, MUSIC_TRACKS } from '../data/music';
 import { SOUNDS, type SoundId } from '../data/sfx';
+import { DENOISE_STRENGTHS, VOICE_TARGET_LUFS, type DenoiseStrength } from '../data/voice';
 import { Icon } from './icons';
+
+export type SoundTab = 'voice' | 'bgm' | 'effects';
+
+const SOUND_TABS: readonly { value: SoundTab; label: string }[] = [
+  { value: 'voice', label: '声' },
+  { value: 'bgm', label: 'BGM' },
+  { value: 'effects', label: '効果音' },
+];
+
+/** 録画ごとの声の様子 */
+export interface VoiceInfo {
+  id: string;
+  name: string;
+  /** いまの声の大きさの設定（dB） */
+  gainDb: number;
+  /** 調べた声の大きさ（LUFS）。調べている途中は undefined、声がなければ null */
+  loudness: number | null | undefined;
+}
 
 interface Props {
   project: Project;
+  tab: SoundTab;
+  onTab(tab: SoundTab): void;
+  voices: VoiceInfo[];
+  /** いまの雑音を減らす設定（録画で違えば、最初の録画のもの） */
+  denoise: DenoiseStrength | 'off';
+  /** 直前にそろえた結果 */
+  normalized: { name: string; db: number }[] | null;
+  onNormalize(): void;
+  onDenoise(strength: DenoiseStrength | 'off'): void;
   /** 鳴る効果音（完成した動画の時刻） */
   effects: { id: string; sound: SoundId; time: number }[];
   /** 試しに鳴らしているもの（'music:calm'・'sound:pikon' など） */
@@ -51,11 +79,72 @@ export function SoundPanel(p: Props) {
       </button>
     );
 
+  const signed = (db: number) => `${db >= 0 ? '+' : ''}${db.toFixed(1)}dB`;
+  const voiceReady = p.voices.every((v) => v.loudness !== undefined);
+
   return (
     <div class="guide sound-panel" aria-live="polite">
-      <h2>BGM と効果音を入れましょう</h2>
-      <p>使わなくてもかまいません。入れないときは、そのまま次へ進みましょう。</p>
+      <h2>音を仕上げましょう</h2>
+      <p>声を聞きやすくして、BGM と効果音を入れます。使わないものは、そのまま次へ進みましょう。</p>
+      <div class="tabs" role="tablist" aria-label="音の種類">
+        {SOUND_TABS.map((t) => (
+          <button key={t.value} role="tab" aria-selected={p.tab === t.value} class={p.tab === t.value ? 'on' : ''} onClick={() => p.onTab(t.value)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
 
+      {p.tab === 'voice' && (
+        <>
+          <div class="section-title">声の大きさをそろえる</div>
+          <p class="hint-text">
+            声の大きさを、YouTube で聞きやすい大きさ（{VOICE_TARGET_LUFS} LUFS くらい）にそろえます。録画ごとに大きさが違っても、同じくらいになります。
+          </p>
+          <ul class="item-list" aria-label="録画ごとの声の大きさ">
+            {p.voices.map((v) => (
+              <li key={v.id}>
+                <span class="item-main static">
+                  <span class="item-name">{v.name}</span>
+                  <span class="item-time">
+                    {v.loudness === undefined
+                      ? '調べています…'
+                      : v.loudness === null
+                        ? '声がありません'
+                        : Math.abs(v.gainDb) > 0.05
+                          ? `${v.loudness.toFixed(1)} → ${(v.loudness + v.gainDb).toFixed(1)} LUFS（${signed(v.gainDb)}）`
+                          : `${v.loudness.toFixed(1)} LUFS`}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <div class="actions">
+            <button class="btn primary" onClick={p.onNormalize} disabled={!voiceReady}>
+              声の大きさをそろえる
+            </button>
+          </div>
+          {p.normalized && (
+            <p class="note">
+              {p.normalized.length === 0
+                ? 'すでにそろっていました。'
+                : `${p.normalized.map((n) => `${n.name}：${signed(n.db)}`).join('、')} にしました。気に入らなければ「元に戻す」で戻せます。`}
+            </p>
+          )}
+          <div class="section-title">雑音を減らす</div>
+          <p class="hint-text">エアコンやパソコンのファンの音など、ずっと鳴っている雑音を小さくします。しゃべっていない静かな部分から、雑音の音色を調べます。強くしすぎると、声が少しこもることがあります。</p>
+          <div class="segmented" role="radiogroup" aria-label="雑音を減らす強さ">
+            {[{ value: 'off' as const, label: 'しない' }, ...DENOISE_STRENGTHS].map((d) => (
+              <button key={d.value} role="radio" aria-checked={p.denoise === d.value} class={p.denoise === d.value ? 'on' : ''} disabled={d.value !== 'off' && !voiceReady} onClick={() => p.onDenoise(d.value)}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+          <p class="hint-text">大きすぎる音は、音が割れないように自動でなめらかに抑えます。</p>
+        </>
+      )}
+
+      {p.tab === 'bgm' && (
+      <>
       <div class="section-title">BGM</div>
       <div class="choice-list" role="radiogroup" aria-label="BGM">
         <div class={`choice ${bgm === null ? 'on' : ''}`}>
@@ -141,7 +230,11 @@ export function SoundPanel(p: Props) {
         </div>
       )}
       <p class="hint-text">入っている曲は、テロッパの中でプログラムで作った曲です。テロッパで作った動画に使えます。</p>
+      </>
+      )}
 
+      {p.tab === 'effects' && (
+      <>
       <div class="section-title">効果音</div>
       <p class="hint-text">名前のボタンを押すと、いまの再生位置（タイムラインのオレンジの線）に置きます。▶ で試しに聴けます。</p>
       <div class="sound-grid">
@@ -186,6 +279,8 @@ export function SoundPanel(p: Props) {
             </label>
           </div>
         </>
+      )}
+      </>
       )}
       <div class="actions sticky">
         <button class="btn primary big" onClick={p.onNext}>

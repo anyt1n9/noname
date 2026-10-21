@@ -4,7 +4,9 @@ import { bgmEnvelope, bgmLevel, bgmPoints } from '../core/bgm';
 import { effectsOnTimeline } from '../core/effects';
 import { fadeLevel, fadeWindows } from '../core/fades';
 import { activeTracks, clipSpeed, emptyProject, sourceAudio, type Clip, type Project } from '../core/project';
+import { NoiseReducer } from '../core/denoise';
 import { TimeStretcher } from '../core/stretch';
+import { LIMIT_CEILING_DB } from '../data/voice';
 import { clamp } from '../core/time';
 import { clipLength, clipStarts, locate, totalDuration } from '../core/timeline';
 import { applyZoom, drawOverlays, overlaysReady, prepareOverlays, resetZoom } from './compose';
@@ -132,7 +134,15 @@ export class Player {
       const ctx = new AudioContext();
       this.ctx = ctx;
       this.gain = ctx.createGain();
-      this.gain.connect(ctx.destination);
+      // 音が割れないように、大きすぎるところだけを抑える（書き出しと同じ上限）
+      const limiter = ctx.createDynamicsCompressor();
+      limiter.threshold.value = LIMIT_CEILING_DB;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.002;
+      limiter.release.value = 0.12;
+      this.gain.connect(limiter);
+      limiter.connect(ctx.destination);
       const sub = () => {
         const g = ctx.createGain();
         g.connect(this.gain!);
@@ -321,12 +331,14 @@ export class Player {
       if (gen !== this.generation) return;
       if (!source) continue;
       // 鳴らす音（声・ゲームの音など）を、それぞれの大きさで同時に流す
-      const tracks = activeTracks(sourceAudio(this.project, clip.sourceId));
+      const audio = sourceAudio(this.project, clip.sourceId);
+      const tracks = activeTracks(audio);
       await Promise.all(
         tracks.map(({ index, gain }) => {
           const sink = source.audioSinks[index];
           if (!sink || gain <= 0) return Promise.resolve();
-          return this.scheduleTrack(gen, sink, clip, clipStart, sourceFrom, gain);
+          const denoise = audio.roles[index] === 'voice' ? (audio.denoise ?? null) : null;
+          return this.scheduleTrack(gen, sink, clip, clipStart, sourceFrom, gain, denoise);
         }),
       );
     }
@@ -340,12 +352,23 @@ export class Player {
     clipStart: number,
     sourceFrom: number,
     gainValue: number,
+    denoise: NonNullable<ReturnType<typeof sourceAudio>['denoise']> | null,
   ): Promise<void> {
     const ctx = this.ctx!;
     const trackGain = ctx.createGain();
     trackGain.gain.value = gainValue;
     trackGain.connect(this.program!);
-    if (clipSpeed(clip) !== 1) return this.scheduleStretched(gen, sink, clip, clipStart, sourceFrom, trackGain);
+    const speed = clipSpeed(clip);
+    if (speed !== 1 || denoise) {
+      // 雑音を減らす → 速さを変える の順に加工してから鳴らす
+      const make = (channels: number, rate: number) => {
+        const list: { push(d: Float32Array[]): Float32Array[]; flush(): Float32Array[] }[] = [];
+        if (denoise) list.push(new NoiseReducer(channels, rate, denoise.profile, denoise.strength));
+        if (speed !== 1) list.push(new TimeStretcher(channels, rate, speed));
+        return list;
+      };
+      return this.scheduleProcessed(gen, sink, clip, clipStart, sourceFrom, trackGain, make);
+    }
     try {
       for await (const { buffer, timestamp, duration } of sink.buffers(sourceFrom, clip.end)) {
         if (gen !== this.generation) return;
@@ -378,21 +401,22 @@ export class Player {
     }
   }
 
-  /** 速さを変えたかたまりの音：声の高さを変えずに速さを変えてから鳴らす */
-  private async scheduleStretched(
+  /** 加工する音（速さを変える・雑音を減らす）：加工してから鳴らす */
+  private async scheduleProcessed(
     gen: number,
     sink: AudioBufferSink,
     clip: Clip,
     clipStart: number,
     sourceFrom: number,
     out: GainNode,
+    make: (channels: number, rate: number) => { push(d: Float32Array[]): Float32Array[]; flush(): Float32Array[] }[],
   ): Promise<void> {
     const ctx = this.ctx!;
     const speed = clipSpeed(clip);
     /** 出す音が始まる、完成した動画の時刻と、終わり */
     const startT = clipStart + (sourceFrom - clip.start) / speed;
     const endT = clipStart + clipLength(clip);
-    let stretcher: TimeStretcher | null = null;
+    let processors: { push(d: Float32Array[]): Float32Array[]; flush(): Float32Array[] }[] | null = null;
     let rate = 0;
     let written = 0;
     const schedule = (data: Float32Array[]) => {
@@ -423,17 +447,31 @@ export class Player {
         const useFrom = Math.max(timestamp, sourceFrom);
         const useTo = Math.min(timestamp + duration, clip.end);
         if (useTo <= useFrom) continue;
-        if (!stretcher) {
+        if (!processors) {
           rate = buffer.sampleRate;
-          stretcher = new TimeStretcher(buffer.numberOfChannels, rate, speed);
+          processors = make(buffer.numberOfChannels, rate);
         }
         const a = Math.round((useFrom - timestamp) * rate);
         const b = Math.min(buffer.length, Math.round((useTo - timestamp) * rate));
-        const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c).subarray(a, b));
-        schedule(stretcher.push(channels));
+        let data: Float32Array[] = Array.from({ length: buffer.numberOfChannels }, (_, c) => buffer.getChannelData(c).subarray(a, b));
+        for (const p of processors) data = p.push(data);
+        schedule(data);
         while (gen === this.generation && this.ctxTime(startT + written / rate) - ctx.currentTime > AUDIO_AHEAD) await sleep(100);
       }
-      if (stretcher && gen === this.generation) schedule(stretcher.flush());
+      if (processors && gen === this.generation) {
+        let data: Float32Array[] | null = null;
+        for (const p of processors) {
+          const pushed: Float32Array[] | null = data ? p.push(data) : null;
+          const rest = p.flush();
+          data = pushed ? pushed.map((d, c) => {
+            const joined = new Float32Array(d.length + rest[c].length);
+            joined.set(d);
+            joined.set(rest[c], d.length);
+            return joined;
+          }) : rest;
+        }
+        if (data && data[0].length > 0) schedule(data);
+      }
     } catch (e) {
       if (gen === this.generation) console.warn('プレビューの音を読めませんでした', e);
     }

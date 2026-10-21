@@ -401,6 +401,11 @@ button {
   min-height: 0;
 }
 
+/* 中身が多いときは、縮めて重ならないようにし、スクロールして見せる */
+.guide > * {
+  flex-shrink: 0;
+}
+
 .guide h2 {
   margin: 0;
   font-size: 20px;
@@ -1317,4 +1322,14 @@ kbd {
 .shape-mark.arrow::before {
   content: '↙';
   font-weight: 700;
+}
+
+.item-list li.kept .item-name {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.item-main.static {
+  cursor: default;
+  justify-content: space-between;
 }

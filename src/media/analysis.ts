@@ -1,4 +1,7 @@
 // 録画ごとの音の大きさの記録を用意する。1本ずつ順番に作り、できた分から画面に出す
+import type { TrackFeatures } from '../core/features';
+import type { VoiceFeatures } from '../core/fillers';
+import { integratedLoudness } from '../core/loudness';
 import { combineLevels, PEAK_BIN_SECONDS } from '../core/peaks';
 import { voiceTracks, type SourceAudio, type SourceInfo } from '../core/project';
 import type { VoiceLevel } from '../core/silence';
@@ -10,6 +13,8 @@ export interface TrackLevels {
   rms: Float32Array;
   /** 0〜1。1 ならできあがり */
   progress: number;
+  /** できあがったときだけ（大きさ・音色の変わり方など） */
+  features?: TrackFeatures;
 }
 
 interface Job {
@@ -80,6 +85,29 @@ export class AnalysisStore {
     return { binSeconds: this.binSeconds, rms: combineLevels(levels) };
   }
 
+  /** 口ぐせを見つけるための、声の特徴。声の音を調べ終わっていなければ undefined */
+  voiceFeatures(sourceId: string, audio: SourceAudio): VoiceFeatures | undefined {
+    const level = this.voiceLevel(sourceId, audio);
+    const first = voiceTracks(audio)[0];
+    const features = first === undefined ? undefined : this.track(sourceId, first)?.features;
+    if (!level || !features) return undefined;
+    return { ...level, flux: features.flux, zcr: features.zcr };
+  }
+
+  /** 声の大きさ（LUFS）。声の音を調べ終わっていなければ undefined、音がなければ null */
+  voiceLoudness(sourceId: string, audio: SourceAudio): number | null | undefined {
+    const indices = voiceTracks(audio);
+    if (indices.length === 0) return null;
+    let sum: Float32Array | null = null;
+    for (const i of indices) {
+      const loud = this.track(sourceId, i)?.features?.loud;
+      if (!loud) return undefined;
+      if (!sum) sum = loud.slice();
+      else for (let k = 0; k < Math.min(sum.length, loud.length); k++) sum[k] += loud[k];
+    }
+    return sum ? integratedLoudness(sum, this.binSeconds) : null;
+  }
+
   /** 全体の進み具合（0〜1）。調べる録画がなければ 1 */
   progress(sourceIds: string[]): number {
     if (sourceIds.length === 0) return 1;
@@ -122,8 +150,11 @@ export class AnalysisStore {
     const missing: number[] = [];
     for (let i = 0; i < count; i++) {
       const saved = await loadLevels(levelsKey(source, i));
-      if (saved && saved.binSeconds === PEAK_BIN_SECONDS) this.set(key, i, { peaks: saved.peaks, rms: saved.rms, progress: 1 });
-      else missing.push(i);
+      if (saved && saved.binSeconds === PEAK_BIN_SECONDS && saved.features) {
+        this.set(key, i, { peaks: saved.peaks, rms: saved.rms, progress: 1, features: saved.features });
+      } else {
+        missing.push(i);
+      }
     }
     if (missing.length > 0) {
       await new Promise<void>((resolve) => {
@@ -135,9 +166,9 @@ export class AnalysisStore {
         worker.onmessage = (e: MessageEvent<AnalysisEvent>) => {
           const ev = e.data;
           if (ev.type === 'track') {
-            this.set(key, ev.track, { peaks: ev.peaks, rms: ev.rms, progress: ev.done ? 1 : ev.progress });
-            if (ev.done) {
-              void saveLevels(levelsKey(source, ev.track), { binSeconds: PEAK_BIN_SECONDS, peaks: ev.peaks, rms: ev.rms });
+            this.set(key, ev.track, { peaks: ev.peaks, rms: ev.rms, progress: ev.done ? 1 : ev.progress, features: ev.features });
+            if (ev.done && ev.features) {
+              void saveLevels(levelsKey(source, ev.track), { binSeconds: PEAK_BIN_SECONDS, peaks: ev.peaks, rms: ev.rms, features: ev.features });
             }
           } else if (ev.type === 'finished') {
             finish();
