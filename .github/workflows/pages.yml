@@ -1,0 +1,43 @@
+# テロッパを GitHub Pages に公開する。
+# どのブランチでも、押し込む（push）たびに型チェック・テスト・ビルドを行い、
+# リポジトリの基本のブランチのときだけ、できた dist/ を公開する。
+# 使う前に、リポジトリの Settings → Pages で「Source」を「GitHub Actions」にしておく（1回だけ）。
+name: 公開（GitHub Pages）
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+
+  deploy:
+    if: github.ref_name == github.event.repository.default_branch
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -64,7 +64,7 @@ export function AboutDialog({ onClose, onPractice, onPrivacy }: { onClose(): voi
         </ul>
         <div class="section-title">インターネットとのやりとり</div>
         <ul class="steps-list about-list">
-          <li>テロッパを開くとき：このサイトから、テロッパのファイルを読み込みます。</li>
+          <li>テロッパを開くとき：テロッパを置いているサイト（GitHub Pages）から、テロッパのファイルを読み込みます。接続元の情報（IP アドレス）が GitHub に伝わります。</li>
           <li>
             自動字幕を初めて使うとき（了承したときだけ）：AI の部品を配布元の Hugging Face（{MODEL_HOST}）からダウンロードします。大きさを調べるための問い合わせもします。接続元の情報（IP アドレス）が配布元に伝わります。
           </li>

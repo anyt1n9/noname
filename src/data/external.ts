@@ -20,9 +20,9 @@ export interface ExternalTransmission {
 export const EXTERNAL_TRANSMISSIONS: readonly ExternalTransmission[] = [
   {
     when: 'テロッパを開くとき',
-    to: 'テロッパを置いているサイトの運営会社（公開場所は未定。決まったらここに書く）',
+    to: 'GitHub, Inc.（アメリカ。テロッパを置いている GitHub Pages の運営会社）',
     what: '接続元の IP アドレス、ブラウザの種類などの情報、読み込むファイルの名前（ふつうのページの読み込みと同じ）',
-    purpose: 'テロッパのファイルを届けるため',
+    purpose: 'テロッパのファイルを届けるため。GitHub は、安全のために接続元の IP アドレスを記録します（GitHub のプライバシーステートメントによります）',
     control: 'テロッパを使うときは必ず行われます（録画や編集内容は送りません）',
   },
   {

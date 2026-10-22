@@ -10,7 +10,7 @@
 | ソースコードのライセンス | **決めた：MIT**（`LICENSE`。著作権者の表示は GitHub の名前 anyt1n9） | 著作権者の表示は、本名などに変えてもよい |
 | 自作の BGM・効果音・見本の録画・テンプレートのライセンス | **決めた：CC0 1.0** | 画面（このソフトについて・BGM の手順）と `public/THIRD_PARTY_LICENSES.txt` に書いた |
 | 正式な名前 | 「テロッパ（仮）」。**「テロッパ」は避けるのがおすすめ**（下の「1.1 名前の下調べ」） | 新しい名前の候補は、既存の商標・アプリ名と重ならないか調べる（特許庁の [J-PlatPat](https://www.j-platpat.inpit.go.jp/) の商標検索、アプリストア、ウェブ検索）。決めたら画面・README・`package.json` の `name` を直す |
-| 公開場所 | 未定 | 下の「2. 公開場所」を参照 |
+| 公開場所 | **決めた：GitHub Pages** | 下の「2. 公開場所」を参照 |
 | 入っている BGM | 自作の5曲（CC0 の曲の入手先に作業環境からつながらなかったため） | このままにするか、CC0 の曲を入れるかを決める。CC0 の曲を入れるときは、1曲ずつ入手先・作者・ライセンスを `public/THIRD_PARTY_LICENSES.txt` に書き、Content ID に登録されていない、信頼できる入手先かを確かめる |
 
 ### 1.1 名前の下調べ（2026年10月、ウェブ検索）
@@ -31,9 +31,11 @@
 | 転送量 | 月 100GB の目安（超えるとメールが来ることがある） | 無料プランでも目安の上限なし |
 | 使い方の条件 | 商売のためのサイト（ネットショップ・有料のサービス）には使えない。無料のソフトの公開や、寄付のリンクはよい | 利用規約に従う |
 
-- テロッパは無料のソフトなので、**GitHub Pages が技術的に合う**（ファイルの大きさの点）。
-- 公開するときは、リポジトリの「Settings → Pages」で GitHub Actions から公開する設定にし、`npm run build` の `dist/` を公開する流れ（ワークフロー）を足す。テロッパは `vite.config.ts` の `base: './'` なので、どの場所（`https://〇〇.github.io/リポジトリ名/`）でも動く。
-- 公開場所が決まったら、「外部に送る情報の一覧」（`src/data/external.ts` の1つ目）と `docs/spec.md` の 20.6 に、運営会社の名前を書く（GitHub, Inc.・アメリカ など）。
+- テロッパは無料のソフトなので、**GitHub Pages が技術的に合う**（ファイルの大きさの点）。→ **GitHub Pages に決めた。**
+- 公開の流れ（ワークフロー）は `.github/workflows/pages.yml`。どのブランチでも押し込むたびに `npm run check`（型チェック・テスト・ビルド）を行い、リポジトリの基本のブランチ（default branch）のときだけ `dist/` を公開する。テロッパは `vite.config.ts` の `base: './'` なので、どの場所でも動く。
+- 公開されるアドレス：`https://anyt1n9.github.io/noname/`（リポジトリの名前が入る。ソフトの名前を変えても、リポジトリの名前を変えなければ同じ）。
+- **作者が1回だけすること**：GitHub のリポジトリの「Settings」→ 左の「Pages」→「Build and deployment」の「Source」で「GitHub Actions」を選ぶ。そのあと「Actions」のタブで「公開（GitHub Pages）」を開き、「Run workflow」を押す（次からは、押し込むたびに自動で公開される）。
+- 「外部に送る情報の一覧」（`src/data/external.ts` の1つ目）と `docs/spec.md` の 20.6 に、運営会社（GitHub, Inc.・アメリカ）を書いた。GitHub は、Pages を見た人の IP アドレスを安全のために記録する（GitHub Docs「What is GitHub Pages?」）。
 
 ## 3. 本物の Chrome・Edge で確かめること
 
